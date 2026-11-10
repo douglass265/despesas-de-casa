@@ -1,7 +1,8 @@
+import gspread
 import pandas as pd
 import plotly.express as px
 import streamlit as st
-from st_gsheets_connection import GSheetsConnection
+from google.oauth2.service_account import Credentials
 
 # ---------- Configuração ----------
 st.set_page_config(page_title="Despesas de Casa", page_icon="🏠", layout="wide")
@@ -30,30 +31,40 @@ def fmt_rs(v: float) -> str:
     return f"R$ {v:,.2f}".replace(",", "@").replace(".", ",").replace("@", ".")
 
 
+# ---------- Conexão com o Google Sheets ----------
+@st.cache_resource
+def abrir_planilha():
+    info = st.secrets["connections.gsheets"]["service_account"]
+    escopos = ["https://www.googleapis.com/auth/spreadsheets"]
+    credenciais = Credentials.from_service_account_info(info, scopes=escopos)
+    cliente = gspread.authorize(credenciais)
+    return cliente.open_by_key(st.secrets["connections.gsheets"]["spreadsheet"])
+
+
 # ---------- Leitura dos dados ----------
 @st.cache_data(ttl=300)
 def carregar_dados() -> pd.DataFrame:
-    conn = st.connection("gsheets", type=GSheetsConnection)
-    df = conn.read(worksheet=ABA_LANCAMENTOS)
-    df = df.rename(columns={
+    ws = abrir_planilha().worksheet(ABA_LANCAMENTOS)
+    valores = ws.get_all_values()
+
+    if len(valores) < 2:
+        return pd.DataFrame(
+            columns=["data", "descricao", "categoria", "valor", "forma", "mes"]
+        )
+
+    cabecalhos, linhas = valores[0], valores[1:]
+    df = pd.DataFrame(linhas, columns=cabecalhos).rename(columns={
         "Data": "data", "Descrição": "descricao", "Categoria": "categoria",
         "Valor (R$)": "valor", "Forma de Pagamento": "forma",
     })
-    df = df.dropna(how="all")
+    df = df[(df["data"] != "") & (df["valor"] != "")]
 
-    # Datas: aceita texto dd/mm/aaaa ou número serial do Google Sheets
-    if pd.api.types.is_numeric_dtype(df["data"]):
-        df["data"] = pd.to_datetime(df["data"], unit="D", origin="1899-12-30")
-    else:
-        df["data"] = pd.to_datetime(df["data"], dayfirst=True, errors="coerce")
+    # Data: aceita 10/11/2026 ou 2026-11-10
+    df["data"] = pd.to_datetime(df["data"], dayfirst=True, errors="coerce")
 
-    # Valores: aceita número ou texto tipo "R$ 1.234,56"
+    # Valor: aceita 45.9, "45,90" ou "R$ 1.234,56"
     def converter_valor(v):
-        if pd.isna(v):
-            return None
-        if isinstance(v, (int, float)):
-            return float(v)
-        t = str(v).strip().replace("R$", "").strip()
+        t = str(v).replace("R$", "").replace("\u00a0", "").strip()
         try:
             return float(t)
         except ValueError:
@@ -101,8 +112,7 @@ if enviado:
         st.error("Escreva uma descrição para o lançamento.")
     else:
         try:
-            conn = st.connection("gsheets", type=GSheetsConnection)
-            ws = conn.spreadsheet.worksheet(ABA_LANCAMENTOS)
+            ws = abrir_planilha().worksheet(ABA_LANCAMENTOS)
             ws.append_row(
                 [data.strftime("%d/%m/%Y"), descricao.strip(), categoria,
                  round(valor, 2), forma],
@@ -127,7 +137,6 @@ if dados.empty:
     st.info("Nenhum lançamento ainda. Use o formulário acima para começar!")
     st.stop()
 
-# Filtro de mês ("Todos" ou um mês com lançamentos)
 meses_com_dados = sorted(dados["mes"].unique(), reverse=True)
 opcoes = {"Todos os meses": None}
 for m in meses_com_dados:
@@ -141,7 +150,6 @@ df_mes = dados if mes_sel is None else dados[dados["mes"] == mes_sel]
 if categorias_filtro:
     df_mes = df_mes[df_mes["categoria"].isin(categorias_filtro)]
 
-# Indicadores
 if df_mes.empty:
     st.info("Nenhum lançamento nesse filtro.")
     st.stop()
@@ -156,7 +164,6 @@ c2.metric("Total geral", fmt_rs(total_geral))
 c3.metric("Lançamentos no período", str(len(df_mes)))
 c4.metric("Categoria mais pesada", cat_top)
 
-# Gráficos
 col_a, col_b = st.columns(2)
 
 with col_a:
@@ -187,7 +194,6 @@ fig_evo.update_layout(yaxis_title=None, xaxis_title=None,
                       margin=dict(l=10, r=10, t=40, b=10))
 st.plotly_chart(fig_evo, use_container_width=True)
 
-# Tabela do período
 st.subheader(f"📋 Lançamentos — {mes_label}")
 df_tabela = df_mes.sort_values("data", ascending=False)[
     ["data", "descricao", "categoria", "valor", "forma"]]
