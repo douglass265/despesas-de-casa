@@ -118,11 +118,6 @@ def converter_valor(v):
             return None
 
 
-def converter_qtd(v):
-    x = converter_valor(v)
-    return 0.0 if x is None else x
-
-
 def converter_data_serie(serie):
     if pd.api.types.is_numeric_dtype(serie):
         return pd.to_datetime(serie, unit="D", origin="1899-12-30", errors="coerce")
@@ -132,7 +127,7 @@ def converter_data_serie(serie):
 def _ler_aba(nome_aba, nomes):
     valores = abrir_planilha().worksheet(nome_aba).get_all_values()
     if len(valores) < 2:
-        return pd.DataFrame(columns=nomes)
+        return pd.DataFrame(columns=list(nomes.values()))
     df = pd.DataFrame(valores[1:], columns=valores[0]).rename(columns=nomes)
     return df
 
@@ -192,6 +187,13 @@ def ler_investimentos() -> pd.DataFrame:
     return df
 
 
+def registrar_linha(aba, valores):
+    abrir_planilha().worksheet(aba).append_row(
+        valores, value_input_option="USER_ENTERED")
+    st.cache_data.clear()
+    st.rerun()
+
+
 despesas, receitas = ler_despesas(), ler_receitas()
 contas, investimentos = ler_contas(), ler_investimentos()
 
@@ -216,19 +218,19 @@ if pagina == "📊 Painel":
               if total_investido > 0 else 0.0)
 
     m1, m2, m3, m4 = st.columns(4)
-    m1.metric(f"Total em contas", fmt_rs(total_contas))
-    m2.metric("Total investido", fmt_rs(total_investido))
-    m3.metric("Carteira hoje", fmt_rs(valor_atual))
-    m4.metric("Rentabilidade", fmt_pct(rentab))
+    m1.metric("💰 Total em contas", fmt_rs(total_contas))
+    m2.metric("📈 Total investido", fmt_rs(total_investido))
+    m3.metric("💼 Carteira hoje", fmt_rs(valor_atual))
+    m4.metric("🎯 Rentabilidade", fmt_pct(rentab))
     p1, p2 = st.columns(2)
-    p1.metric("💼 Patrimônio total (contas + carteira)",
+    p1.metric("🏠 Patrimônio total (contas + carteira)",
               fmt_rs(total_contas + valor_atual))
-    p2.metric(f"Saldo de {MESES_PT[hoje.month - 1]} (receitas − despesas)",
+    p2.metric(f"⚖️ Saldo de {MESES_PT[hoje.month - 1]} (receitas − despesas)",
               fmt_rs(rec_mes - desp_mes))
 
     st.divider()
 
-    # Carteira estilo Investidor10
+    # ----- Carteira estilo Investidor10 -----
     st.subheader("📈 Minha carteira")
     if investimentos.empty or valor_atual == 0:
         st.info("Nenhum investimento com valor ainda. Lance pelo menu ➕ Lançamentos.")
@@ -262,15 +264,16 @@ if pagina == "📊 Painel":
 
     st.divider()
 
-    # Contas
+    # ----- Contas -----
     st.subheader("🏦 Minhas contas")
     if contas.empty:
         st.info("Nenhuma conta cadastrada ainda.")
     else:
         cc1, cc2 = st.columns([3, 2])
+        contas_ord = contas.sort_values("saldo")
         with cc1:
-            fig_c = px.bar(contas.sort_values("saldo"), x="saldo", y="conta",
-                           orientation="h", text=contas.sort_values("saldo")["saldo"].map(fmt_rs),
+            fig_c = px.bar(contas_ord, x="saldo", y="conta", orientation="h",
+                           text=contas_ord["saldo"].map(fmt_rs),
                            title="Saldo por conta")
             fig_c.update_layout(xaxis_title=None, yaxis_title=None,
                                 margin=dict(l=10, r=10, t=40, b=10))
@@ -286,11 +289,14 @@ if pagina == "📊 Painel":
 
     st.divider()
 
-    # Filtro de mês + despesas x receitas
+    # ----- Despesas x Receitas -----
     st.subheader("💵 Despesas × Receitas")
-    meses = sorted(set(list(despesas["mes"].unique()) if not despesas.empty else []
-                       + list(receitas["mes"].unique()) if not receitas.empty else []),
-                   reverse=True)
+    meses = set()
+    if not despesas.empty:
+        meses |= set(despesas["mes"].unique())
+    if not receitas.empty:
+        meses |= set(receitas["mes"].unique())
+    meses = sorted(meses, reverse=True)
     opcoes = {"Todos os meses": None}
     for m in meses:
         opcoes[f"{MESES_PT[m.month - 1]} {m.year}"] = m
@@ -300,20 +306,22 @@ if pagina == "📊 Painel":
     d_f = despesas if mes_sel is None else despesas[despesas["mes"] == mes_sel]
     r_f = receitas if mes_sel is None else receitas[receitas["mes"] == mes_sel]
 
-    evo_d = (despesas.groupby("mes", as_index=False)["valor"].sum()
-             .rename(columns={"valor": "Despesas"}) if not despesas.empty
-             else pd.DataFrame(columns=["mes", "Despesas"]))
-    evo_r = (receitas.groupby("mes", as_index=False)["valor"].sum()
-             .rename(columns={"valor": "Receitas"}) if not receitas.empty
-             else pd.DataFrame(columns=["mes", "Receitas"]))
-    evo = pd.merge(evo_d, evo_r, on="mes", how="outer").sort_values("mes")
-    if not evo.empty:
+    if meses:
+        evo_d = (despesas.groupby("mes", as_index=False)["valor"].sum()
+                 .rename(columns={"valor": "Despesas"}) if not despesas.empty
+                 else pd.DataFrame(columns=["mes", "Despesas"]))
+        evo_r = (receitas.groupby("mes", as_index=False)["valor"].sum()
+                 .rename(columns={"valor": "Receitas"}) if not receitas.empty
+                 else pd.DataFrame(columns=["mes", "Receitas"]))
+        evo = pd.merge(evo_d, evo_r, on="mes", how="outer").sort_values("mes")
         evo["rotulo"] = evo["mes"].apply(
             lambda p: f"{MESES_PT[p.month - 1]}/{str(p.year)[2:]}")
         evo_melt = evo.melt(id_vars="rotulo", value_vars=["Despesas", "Receitas"],
                             var_name="Tipo", value_name="valor")
-        fig_e = px.bar(evo_melt, x="rotulo", y="valor", color="Tipo", barmode="group",
-                       color_discrete_map={"Despesas": "#d93025", "Receitas": "#0f9d58"},
+        fig_e = px.bar(evo_melt, x="rotulo", y="valor", color="Tipo",
+                       barmode="group",
+                       color_discrete_map={"Despesas": "#d93025",
+                                           "Receitas": "#0f9d58"},
                        title="Evolução mês a mês")
         fig_e.update_layout(yaxis_title=None, xaxis_title=None,
                             margin=dict(l=10, r=10, t=40, b=10),
@@ -322,7 +330,9 @@ if pagina == "📊 Painel":
 
     g1, g2 = st.columns(2)
     with g1:
-        if not d_f.empty:
+        if d_f.empty:
+            st.info("Sem despesas nesse período.")
+        else:
             gc = (d_f.groupby("categoria", as_index=False)["valor"].sum()
                   .sort_values("valor"))
             fig_gc = px.bar(gc, x="valor", y="categoria", orientation="h",
@@ -333,5 +343,15 @@ if pagina == "📊 Painel":
             fig_gc.update_xaxes(visible=False)
             st.plotly_chart(fig_gc, use_container_width=True)
     with g2:
-        if not r_f.empty:
-           
+        if r_f.empty:
+            st.info("Sem receitas nesse período.")
+        else:
+            gr = (r_f.groupby("categoria", as_index=False)["valor"].sum()
+                  .sort_values("valor"))
+            fig_gr = px.bar(gr, x="valor", y="categoria", orientation="h",
+                            text=gr["valor"].map(fmt_rs),
+                            title=f"Receitas por categoria — {mes_label}")
+            fig_gr.update_layout(xaxis_title=None, yaxis_title=None,
+                                 margin=dict(l=10, r=10, t=40, b=10))
+            fig_gr.update_xaxes(visible=False)
+            st.plotly_chart(fig
