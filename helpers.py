@@ -124,7 +124,7 @@ def _limpar_movimentos(df, colunas_finais):
     df["mes"] = df["data"].dt.to_period("M")
     df = df.sort_values("data", ascending=False).reset_index(drop=True)
     df["_linha"] = df.index + 2
-    return df[colunas_finais + ["_linha"]]
+        return df[colunas_finais + ["mes", "_linha"]]
 
 
 @st.cache_data(ttl=300)
