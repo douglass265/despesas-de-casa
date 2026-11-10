@@ -1,16 +1,27 @@
 import streamlit as st
 from helpers import (CATEGORIAS_DESPESA, CATEGORIAS_RECEITA, FORMAS_PAGAMENTO,
                      CLASSES, ABA_DESPESAS, ABA_RECEITAS, ABA_CONTAS,
-                     ABA_INVEST, salvar)
+                     ABA_INVEST, salvar, abrir_planilha)
 
 TIPOS_CONTA = ["Conta corrente", "Conta digital/Pix", "Poupança",
                "Cartão de crédito", "Dinheiro", "Outro"]
+
+
+@st.cache_data(ttl=300)
+def listar_contas():
+    try:
+        valores = abrir_planilha().worksheet(ABA_CONTAS).get_all_values()
+        return [l[0].strip() for l in valores[1:] if l and l[0].strip()]
+    except Exception:
+        return []
 
 
 def render():
     st.subheader("➕ Lançamentos")
     aba = st.radio("", ["💸 Despesa", "💰 Receita", "🏦 Conta",
                         "📈 Investimento"], horizontal=True)
+    contas = listar_contas()
+    opcoes_conta = ["(sem conta)"] + contas
 
     if aba == "💸 Despesa":
         with st.form("f_despesa", clear_on_submit=True):
@@ -21,12 +32,14 @@ def render():
             c3, c4 = st.columns(2)
             cat = c3.selectbox("Categoria", CATEGORIAS_DESPESA)
             forma = c4.selectbox("Forma de pagamento", FORMAS_PAGAMENTO)
+            conta_sel = st.selectbox("💳 Pagar com a conta", opcoes_conta)
             if st.form_submit_button("💾 Salvar despesa", type="primary",
                                      use_container_width=True):
                 if desc.strip():
-                    salvar(ABA_DESPESAS, [data.strftime("%d/%m/%Y"),
-                                          desc.strip(), cat, round(valor, 2),
-                                          forma],
+                    salvar(ABA_DESPESAS,
+                           [data.strftime("%d/%m/%Y"), desc.strip(), cat,
+                            round(valor, 2), forma,
+                            "" if conta_sel == "(sem conta)" else conta_sel],
                            f"✅ Despesa salva: {desc.strip()} — R$ {valor:.2f}")
                 else:
                     st.error("Escreva uma descrição.")
@@ -39,11 +52,15 @@ def render():
                                     key="vr")
             desc = st.text_input("Descrição", key="descr")
             cat = st.selectbox("Categoria", CATEGORIAS_RECEITA)
+            conta_sel = st.selectbox("💳 Recebido na conta", opcoes_conta,
+                                     key="cr")
             if st.form_submit_button("💾 Salvar receita", type="primary",
                                      use_container_width=True):
                 if desc.strip():
-                    salvar(ABA_RECEITAS, [data.strftime("%d/%m/%Y"),
-                                          desc.strip(), cat, round(valor, 2)],
+                    salvar(ABA_RECEITAS,
+                           [data.strftime("%d/%m/%Y"), desc.strip(), cat,
+                            round(valor, 2),
+                            "" if conta_sel == "(sem conta)" else conta_sel],
                            f"✅ Receita salva: {desc.strip()} — R$ {valor:.2f}")
                 else:
                     st.error("Escreva uma descrição.")
