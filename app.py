@@ -2,27 +2,29 @@ import gspread
 import pandas as pd
 import plotly.express as px
 import streamlit as st
+from datetime import date
 from google.oauth2.service_account import Credentials
 
 # ---------- Configuração ----------
-st.set_page_config(page_title="Despesas de Casa", page_icon="🏠", layout="wide")
+st.set_page_config(page_title="Finanças da Casa", page_icon="🏠", layout="wide")
 
 SPREADSHEET_ID = "1sLKJiAJd-rGGCN1Tm5gi5SV6HHM0-v-Jhg6D1NcYaY0"
-ABA_LANCAMENTOS = "Lançamentos"
+ABA_DESPESAS, ABA_RECEITAS = "Despesas", "Receitas"
+ABA_CONTAS, ABA_INVEST = "Contas", "Investimentos"
 
-CATEGORIAS = [
+CATEGORIAS_DESPESA = [
     "Alimentação (fora de casa)", "Mercado/Supermercado", "Aluguel/Condomínio",
     "Energia elétrica", "Água", "Internet", "Telefone/Celular",
     "Transporte/Combustível", "Saúde/Plano de saúde", "Farmácia",
     "Educação", "Lazer/Entretenimento", "Vestuário", "Streaming/Assinaturas",
     "Pets", "Outros",
 ]
-
-FORMAS_PAGAMENTO = [
-    "Dinheiro", "Pix", "Cartão de Crédito", "Cartão de Débito",
-    "Débito Automático", "Boleto", "Vale Alimentação/Refeição",
-]
-
+CATEGORIAS_RECEITA = ["Salário", "Freelance/Extra", "Aluguel recebido",
+                      "Rendimentos", "Vendas", "Presente", "Outros"]
+FORMAS_PAGAMENTO = ["Dinheiro", "Pix", "Cartão de Crédito", "Cartão de Débito",
+                    "Débito Automático", "Boleto", "Vale Alimentação/Refeição"]
+CLASSES = ["Ações", "FIIs", "Renda Fixa", "Tesouro Direto", "CDB/LCI/LCA",
+           "ETFs", "BDRs", "Criptomoedas", "Fundos", "Outros"]
 MESES_PT = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho",
             "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"]
 
@@ -41,33 +43,33 @@ universe_domain = "googleapis.com"'''
 
 
 def fmt_rs(v: float) -> str:
-    """Formata número no padrão brasileiro: R$ 1.234,56"""
     return f"R$ {v:,.2f}".replace(",", "@").replace(".", ",").replace("@", ".")
 
 
+def fmt_pct(v: float) -> str:
+    sinal = "+" if v >= 0 else ""
+    return f"{sinal}{v:,.2f}%".replace(",", "@").replace(".", ",").replace("@", ".")
+
+
+# ---------- Credenciais ----------
 def caminhos_de_chaves(no, prefixo=""):
-    """Lista somente os NOMES das chaves do Secrets (nunca os valores)."""
     resultado = []
     try:
         chaves = list(no.keys())
     except Exception:
         return resultado
     for k in chaves:
-        caminho = f"{prefixo}{k}"
-        resultado.append(caminho)
-        resultado.extend(caminhos_de_chaves(no[k], caminho + "."))
+        resultado.append(f"{prefixo}{k}")
+        resultado.extend(caminhos_de_chaves(no[k], f"{prefixo}{k}."))
     return resultado
 
 
 def obter_info_credenciais():
-    """Procura as credenciais aceitando todas as estruturas comuns de Secrets."""
     candidatos = []
-    for caminho in (
-        ("connections", "gsheets", "service_account"),
-        ("connections", "gsheets"),
-        ("gsheets", "service_account"),
-        ("service_account",),
-    ):
+    for caminho in (("connections", "gsheets", "service_account"),
+                    ("connections", "gsheets"),
+                    ("gsheets", "service_account"),
+                    ("service_account",)):
         try:
             no = st.secrets
             for parte in caminho:
@@ -88,21 +90,15 @@ def obter_info_credenciais():
 INFO_CREDENCIAIS = obter_info_credenciais()
 
 if INFO_CREDENCIAIS is None:
-    st.title("🏠 Despesas de Casa")
+    st.title("🏠 Finanças da Casa")
     st.error("Não encontrei as credenciais do Google no Secrets deste app.")
     estrutura = caminhos_de_chaves(st.secrets)
-    st.caption("Estrutura detectada no Secrets (somente nomes, nunca valores): "
+    st.caption("Estrutura detectada no Secrets (somente nomes): "
                + (", ".join(estrutura) if estrutura else "nenhuma"))
-    st.markdown(
-        "No app: **Manage app** (canto inferior direito) → **⋮ → Settings → "
-        "Secrets**, cole o bloco abaixo preenchido com os valores do JSON e "
-        "clique em **Save**:"
-    )
     st.code(SECRETS_EXEMPLO, language="toml")
     st.stop()
 
 
-# ---------- Conexão com o Google Sheets ----------
 @st.cache_resource
 def abrir_planilha():
     escopos = ["https://www.googleapis.com/auth/spreadsheets"]
@@ -111,36 +107,44 @@ def abrir_planilha():
     return gspread.authorize(credenciais).open_by_key(SPREADSHEET_ID)
 
 
-# ---------- Leitura dos dados ----------
-@st.cache_data(ttl=300)
-def carregar_dados() -> pd.DataFrame:
-    ws = abrir_planilha().worksheet(ABA_LANCAMENTOS)
-    valores = ws.get_all_values()
-
-    if len(valores) < 2:
-        return pd.DataFrame(
-            columns=["data", "descricao", "categoria", "valor", "forma", "mes"]
-        )
-
-    cabecalhos, linhas = valores[0], valores[1:]
-    df = pd.DataFrame(linhas, columns=cabecalhos).rename(columns={
-        "Data": "data", "Descrição": "descricao", "Categoria": "categoria",
-        "Valor (R$)": "valor", "Forma de Pagamento": "forma",
-    })
-    df = df[(df["data"] != "") & (df["valor"] != "")]
-
-    df["data"] = pd.to_datetime(df["data"], dayfirst=True, errors="coerce")
-
-    def converter_valor(v):
-        t = str(v).replace("R$", "").replace("\u00a0", "").strip()
+def converter_valor(v):
+    t = str(v).replace("R$", "").replace("\u00a0", "").strip()
+    try:
+        return float(t)
+    except ValueError:
         try:
-            return float(t)
+            return float(t.replace(".", "").replace(",", "."))
         except ValueError:
-            try:
-                return float(t.replace(".", "").replace(",", "."))
-            except ValueError:
-                return None
+            return None
 
+
+def converter_qtd(v):
+    x = converter_valor(v)
+    return 0.0 if x is None else x
+
+
+def converter_data_serie(serie):
+    if pd.api.types.is_numeric_dtype(serie):
+        return pd.to_datetime(serie, unit="D", origin="1899-12-30", errors="coerce")
+    return pd.to_datetime(serie, dayfirst=True, errors="coerce")
+
+
+def _ler_aba(nome_aba, nomes):
+    valores = abrir_planilha().worksheet(nome_aba).get_all_values()
+    if len(valores) < 2:
+        return pd.DataFrame(columns=nomes)
+    df = pd.DataFrame(valores[1:], columns=valores[0]).rename(columns=nomes)
+    return df
+
+
+@st.cache_data(ttl=300)
+def ler_despesas() -> pd.DataFrame:
+    df = _ler_aba(ABA_DESPESAS, {"Data": "data", "Descrição": "descricao",
+                                 "Categoria": "categoria", "Valor (R$)": "valor",
+                                 "Forma de Pagamento": "forma"})
+    if df.empty:
+        return df
+    df["data"] = converter_data_serie(df["data"])
     df["valor"] = df["valor"].map(converter_valor)
     df = df.dropna(subset=["data", "valor"])
     df["valor"] = df["valor"].abs()
@@ -148,146 +152,186 @@ def carregar_dados() -> pd.DataFrame:
     return df
 
 
+@st.cache_data(ttl=300)
+def ler_receitas() -> pd.DataFrame:
+    df = _ler_aba(ABA_RECEITAS, {"Data": "data", "Descrição": "descricao",
+                                 "Categoria": "categoria", "Valor (R$)": "valor"})
+    if df.empty:
+        return df
+    df["data"] = converter_data_serie(df["data"])
+    df["valor"] = df["valor"].map(converter_valor)
+    df = df.dropna(subset=["data", "valor"])
+    df["valor"] = df["valor"].abs()
+    df["mes"] = df["data"].dt.to_period("M")
+    return df
+
+
+@st.cache_data(ttl=300)
+def ler_contas() -> pd.DataFrame:
+    df = _ler_aba(ABA_CONTAS, {"Banco/Conta": "conta", "Tipo": "tipo",
+                               "Saldo Atual (R$)": "saldo"})
+    if df.empty:
+        return df
+    df = df[df["conta"] != ""]
+    df["saldo"] = df["saldo"].map(converter_valor).fillna(0.0)
+    return df
+
+
+@st.cache_data(ttl=300)
+def ler_investimentos() -> pd.DataFrame:
+    df = _ler_aba(ABA_INVEST, {"Ativo": "ativo", "Classe": "classe",
+                               "Quantidade": "qtd", "Preço Médio (R$)": "pm",
+                               "Preço Atual (R$)": "pa",
+                               "Total Investido (R$)": "investido",
+                               "Valor Atual (R$)": "atual"})
+    if df.empty:
+        return df
+    df = df[df["ativo"] != ""]
+    for c in ["qtd", "pm", "pa", "investido", "atual"]:
+        df[c] = df[c].map(converter_valor).fillna(0.0)
+    return df
+
+
+despesas, receitas = ler_despesas(), ler_receitas()
+contas, investimentos = ler_contas(), ler_investimentos()
+
 # ---------- Barra lateral ----------
-st.sidebar.title("🏠 Despesas de Casa")
+st.sidebar.title("🏠 Finanças da Casa")
+pagina = st.sidebar.radio("Navegar", ["📊 Painel", "➕ Lançamentos"])
 if st.sidebar.button("🔄 Atualizar dados", use_container_width=True):
     st.cache_data.clear()
     st.rerun()
 
-# ---------- Formulário de lançamento ----------
-st.title("🏠 Despesas de Casa")
-st.subheader("➕ Lançar despesa")
+# ================== PÁGINA PAINEL ==================
+if pagina == "📊 Painel":
+    st.title("📊 Painel geral")
 
-with st.form("form_lancamento", clear_on_submit=True):
-    c1, c2 = st.columns(2)
-    with c1:
-        data = st.date_input("Data", format="DD/MM/YYYY")
-    with c2:
-        valor = st.number_input("Valor (R$)", min_value=0.01, format="%.2f")
-    descricao = st.text_input("Descrição")
-    c3, c4 = st.columns(2)
-    with c3:
-        categoria = st.selectbox("Categoria", CATEGORIAS)
-    with c4:
-        forma = st.selectbox("Forma de pagamento", FORMAS_PAGAMENTO)
-    enviado = st.form_submit_button("💾 Salvar lançamento", type="primary",
-                                    use_container_width=True)
+    hoje = pd.Period(date.today(), freq="M")
+    desp_mes = despesas[despesas["mes"] == hoje]["valor"].sum() if not despesas.empty else 0.0
+    rec_mes = receitas[receitas["mes"] == hoje]["valor"].sum() if not receitas.empty else 0.0
+    total_contas = contas["saldo"].sum() if not contas.empty else 0.0
+    total_investido = investimentos["investido"].sum() if not investimentos.empty else 0.0
+    valor_atual = investimentos["atual"].sum() if not investimentos.empty else 0.0
+    rentab = ((valor_atual - total_investido) / total_investido * 100
+              if total_investido > 0 else 0.0)
 
-if enviado:
-    if not descricao.strip():
-        st.error("Escreva uma descrição para o lançamento.")
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric(f"Total em contas", fmt_rs(total_contas))
+    m2.metric("Total investido", fmt_rs(total_investido))
+    m3.metric("Carteira hoje", fmt_rs(valor_atual))
+    m4.metric("Rentabilidade", fmt_pct(rentab))
+    p1, p2 = st.columns(2)
+    p1.metric("💼 Patrimônio total (contas + carteira)",
+              fmt_rs(total_contas + valor_atual))
+    p2.metric(f"Saldo de {MESES_PT[hoje.month - 1]} (receitas − despesas)",
+              fmt_rs(rec_mes - desp_mes))
+
+    st.divider()
+
+    # Carteira estilo Investidor10
+    st.subheader("📈 Minha carteira")
+    if investimentos.empty or valor_atual == 0:
+        st.info("Nenhum investimento com valor ainda. Lance pelo menu ➕ Lançamentos.")
     else:
-        try:
-            ws = abrir_planilha().worksheet(ABA_LANCAMENTOS)
-            ws.append_row(
-                [data.strftime("%d/%m/%Y"), descricao.strip(), categoria,
-                 round(valor, 2), forma],
-                value_input_option="USER_ENTERED",
-            )
-            st.cache_data.clear()
-            st.session_state["msg_sucesso"] = (
-                f"✅ Salvo: {descricao.strip()} — {fmt_rs(valor)}"
-            )
-            st.rerun()
-        except Exception as e:
-            st.error(f"Não consegui salvar na planilha: {e}")
+        c1, c2 = st.columns([2, 3])
+        with c1:
+            dist = (investimentos.groupby("classe", as_index=False)["atual"]
+                    .sum().query("atual > 0"))
+            fig = px.pie(dist, names="classe", values="atual", hole=0.55,
+                         title="Distribuição por classe")
+            fig.update_layout(margin=dict(l=10, r=10, t=40, b=10),
+                              legend_font_size=11)
+            st.plotly_chart(fig, use_container_width=True)
+        with c2:
+            tb = investimentos.copy()
+            tb["variacao"] = ((tb["atual"] - tb["investido"]) / tb["investido"] * 100
+                              ).where(tb["investido"] > 0, 0.0)
+            tb = tb[["ativo", "classe", "qtd", "pm", "pa", "investido",
+                     "atual", "variacao"]].sort_values("atual", ascending=False)
+            st.dataframe(
+                tb, use_container_width=True, hide_index=True,
+                column_config={
+                    "ativo": "Ativo", "classe": "Classe",
+                    "qtd": st.column_config.NumberColumn("Qtd", format="%.4f"),
+                    "pm": st.column_config.NumberColumn("Preço médio", format="R$ %.2f"),
+                    "pa": st.column_config.NumberColumn("Preço atual", format="R$ %.2f"),
+                    "investido": st.column_config.NumberColumn("Investido", format="R$ %.2f"),
+                    "atual": st.column_config.NumberColumn("Valor atual", format="R$ %.2f"),
+                    "variacao": st.column_config.NumberColumn("Variação", format="%.2f%%"),
+                })
 
-if "msg_sucesso" in st.session_state:
-    st.success(st.session_state.pop("msg_sucesso"))
+    st.divider()
 
-# ---------- Painel ----------
-st.divider()
-st.subheader("📊 Painel de despesas")
+    # Contas
+    st.subheader("🏦 Minhas contas")
+    if contas.empty:
+        st.info("Nenhuma conta cadastrada ainda.")
+    else:
+        cc1, cc2 = st.columns([3, 2])
+        with cc1:
+            fig_c = px.bar(contas.sort_values("saldo"), x="saldo", y="conta",
+                           orientation="h", text=contas.sort_values("saldo")["saldo"].map(fmt_rs),
+                           title="Saldo por conta")
+            fig_c.update_layout(xaxis_title=None, yaxis_title=None,
+                                margin=dict(l=10, r=10, t=40, b=10))
+            fig_c.update_xaxes(visible=False)
+            st.plotly_chart(fig_c, use_container_width=True)
+        with cc2:
+            st.dataframe(
+                contas[["conta", "tipo", "saldo"]], use_container_width=True,
+                hide_index=True,
+                column_config={
+                    "conta": "Conta", "tipo": "Tipo",
+                    "saldo": st.column_config.NumberColumn("Saldo", format="R$ %.2f")})
 
-try:
-    dados = carregar_dados()
-except Exception as e:
-    st.error("Não consegui acessar a planilha do Google.")
-    st.markdown("Detalhe técnico do erro:")
-    st.code(str(e))
-    st.markdown(
-        "**Causas mais comuns:**\n"
-        "1. A conta de serviço não está compartilhada na planilha — abra a "
-        "planilha → **Compartilhar** → confira se "
-        "`despesas-de-casa@galaxy-watch-assistente-334520.iam.gserviceaccount.com` "
-        "está lá como **Editor**\n"
-        "2. A **Google Sheets API** não está ativada no projeto — no Console "
-        "Google Cloud: **APIs e serviços → Biblioteca** → pesquise *Google "
-        "Sheets API* → **Ativar**"
-    )
-    st.stop()
+    st.divider()
 
-if dados.empty:
-    st.info("Nenhum lançamento ainda. Use o formulário acima para começar!")
-    st.stop()
+    # Filtro de mês + despesas x receitas
+    st.subheader("💵 Despesas × Receitas")
+    meses = sorted(set(list(despesas["mes"].unique()) if not despesas.empty else []
+                       + list(receitas["mes"].unique()) if not receitas.empty else []),
+                   reverse=True)
+    opcoes = {"Todos os meses": None}
+    for m in meses:
+        opcoes[f"{MESES_PT[m.month - 1]} {m.year}"] = m
+    mes_label = st.selectbox("Período", list(opcoes.keys()), index=0)
+    mes_sel = opcoes[mes_label]
 
-meses_com_dados = sorted(dados["mes"].unique(), reverse=True)
-opcoes = {"Todos os meses": None}
-for m in meses_com_dados:
-    opcoes[f"{MESES_PT[m.month - 1]} {m.year}"] = m
-mes_label = st.sidebar.selectbox("Mês do painel", list(opcoes.keys()), index=0)
-mes_sel = opcoes[mes_label]
+    d_f = despesas if mes_sel is None else despesas[despesas["mes"] == mes_sel]
+    r_f = receitas if mes_sel is None else receitas[receitas["mes"] == mes_sel]
 
-categorias_filtro = st.sidebar.multiselect("Filtrar categorias (opcional)", CATEGORIAS)
+    evo_d = (despesas.groupby("mes", as_index=False)["valor"].sum()
+             .rename(columns={"valor": "Despesas"}) if not despesas.empty
+             else pd.DataFrame(columns=["mes", "Despesas"]))
+    evo_r = (receitas.groupby("mes", as_index=False)["valor"].sum()
+             .rename(columns={"valor": "Receitas"}) if not receitas.empty
+             else pd.DataFrame(columns=["mes", "Receitas"]))
+    evo = pd.merge(evo_d, evo_r, on="mes", how="outer").sort_values("mes")
+    if not evo.empty:
+        evo["rotulo"] = evo["mes"].apply(
+            lambda p: f"{MESES_PT[p.month - 1]}/{str(p.year)[2:]}")
+        evo_melt = evo.melt(id_vars="rotulo", value_vars=["Despesas", "Receitas"],
+                            var_name="Tipo", value_name="valor")
+        fig_e = px.bar(evo_melt, x="rotulo", y="valor", color="Tipo", barmode="group",
+                       color_discrete_map={"Despesas": "#d93025", "Receitas": "#0f9d58"},
+                       title="Evolução mês a mês")
+        fig_e.update_layout(yaxis_title=None, xaxis_title=None,
+                            margin=dict(l=10, r=10, t=40, b=10),
+                            legend_font_size=11)
+        st.plotly_chart(fig_e, use_container_width=True)
 
-df_mes = dados if mes_sel is None else dados[dados["mes"] == mes_sel]
-if categorias_filtro:
-    df_mes = df_mes[df_mes["categoria"].isin(categorias_filtro)]
-
-if df_mes.empty:
-    st.info("Nenhum lançamento nesse filtro.")
-    st.stop()
-
-total_mes = df_mes["valor"].sum()
-total_geral = dados["valor"].sum()
-cat_top = df_mes.groupby("categoria")["valor"].sum().idxmax()
-
-c1, c2, c3, c4 = st.columns(4)
-c1.metric(f"Total — {mes_label}", fmt_rs(total_mes))
-c2.metric("Total geral", fmt_rs(total_geral))
-c3.metric("Lançamentos no período", str(len(df_mes)))
-c4.metric("Categoria mais pesada", cat_top)
-
-col_a, col_b = st.columns(2)
-
-with col_a:
-    gasto_cat = (df_mes.groupby("categoria", as_index=False)["valor"]
-                 .sum().sort_values("valor"))
-    gasto_cat["texto"] = gasto_cat["valor"].map(fmt_rs)
-    fig_cat = px.bar(gasto_cat, x="valor", y="categoria", orientation="h",
-                     text="texto", title=f"Gasto por categoria — {mes_label}")
-    fig_cat.update_layout(xaxis_title=None, yaxis_title=None,
-                          margin=dict(l=10, r=10, t=40, b=10))
-    fig_cat.update_xaxes(visible=False)
-    st.plotly_chart(fig_cat, use_container_width=True)
-
-with col_b:
-    forma_sum = df_mes.groupby("forma", as_index=False)["valor"].sum()
-    fig_forma = px.pie(forma_sum, names="forma", values="valor", hole=0.55,
-                       title="Formas de pagamento")
-    fig_forma.update_layout(margin=dict(l=10, r=10, t=40, b=10))
-    st.plotly_chart(fig_forma, use_container_width=True)
-
-evo = dados.groupby("mes", as_index=False)["valor"].sum()
-evo["rotulo"] = evo["mes"].apply(lambda p: f"{MESES_PT[p.month - 1]}/{str(p.year)[2:]}")
-evo["texto"] = evo["valor"].map(fmt_rs)
-fig_evo = px.line(evo, x="rotulo", y="valor", text="texto", markers=True,
-                  title="Evolução mês a mês")
-fig_evo.update_traces(textposition="top center")
-fig_evo.update_layout(yaxis_title=None, xaxis_title=None,
-                      margin=dict(l=10, r=10, t=40, b=10))
-st.plotly_chart(fig_evo, use_container_width=True)
-
-st.subheader(f"📋 Lançamentos — {mes_label}")
-df_tabela = df_mes.sort_values("data", ascending=False)[
-    ["data", "descricao", "categoria", "valor", "forma"]]
-st.dataframe(
-    df_tabela, use_container_width=True, hide_index=True,
-    column_config={
-        "data": st.column_config.DateColumn("Data", format="DD/MM/YYYY"),
-        "descricao": "Descrição",
-        "categoria": "Categoria",
-        "valor": st.column_config.NumberColumn("Valor (R$)", format="R$ %.2f"),
-        "forma": "Pagamento",
-    },
-)
+    g1, g2 = st.columns(2)
+    with g1:
+        if not d_f.empty:
+            gc = (d_f.groupby("categoria", as_index=False)["valor"].sum()
+                  .sort_values("valor"))
+            fig_gc = px.bar(gc, x="valor", y="categoria", orientation="h",
+                            text=gc["valor"].map(fmt_rs),
+                            title=f"Despesas por categoria — {mes_label}")
+            fig_gc.update_layout(xaxis_title=None, yaxis_title=None,
+                                 margin=dict(l=10, r=10, t=40, b=10))
+            fig_gc.update_xaxes(visible=False)
+            st.plotly_chart(fig_gc, use_container_width=True)
+    with g2:
+        if not r_f.empty:
+           
