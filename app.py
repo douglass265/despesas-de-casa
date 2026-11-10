@@ -45,20 +45,43 @@ def fmt_rs(v: float) -> str:
     return f"R$ {v:,.2f}".replace(",", "@").replace(".", ",").replace("@", ".")
 
 
-# ---------- Credenciais (aceita os formatos mais comuns de colagem) ----------
+def caminhos_de_chaves(no, prefixo=""):
+    """Lista somente os NOMES das chaves do Secrets (nunca os valores)."""
+    resultado = []
+    try:
+        chaves = list(no.keys())
+    except Exception:
+        return resultado
+    for k in chaves:
+        caminho = f"{prefixo}{k}"
+        resultado.append(caminho)
+        resultado.extend(caminhos_de_chaves(no[k], caminho + "."))
+    return resultado
+
+
 def obter_info_credenciais():
+    """Procura as credenciais aceitando todas as estruturas comuns de Secrets."""
+    candidatos = []
+    for caminho in (
+        ("connections", "gsheets", "service_account"),
+        ("connections", "gsheets"),
+        ("gsheets", "service_account"),
+        ("service_account",),
+    ):
+        try:
+            no = st.secrets
+            for parte in caminho:
+                no = no[parte]
+            candidatos.append(dict(no))
+        except (KeyError, TypeError):
+            pass
     try:
-        return dict(st.secrets["connections.gsheets"]["service_account"])
-    except KeyError:
+        candidatos.append(dict(st.secrets))
+    except (KeyError, TypeError):
         pass
-    try:
-        secao = st.secrets["connections.gsheets"]
-        if {"private_key", "client_email"}.issubset(set(secao.keys())):
-            return dict(secao)
-    except KeyError:
-        pass
-    if {"private_key", "client_email"}.issubset(set(st.secrets.keys())):
-        return dict(st.secrets)
+    for c in candidatos:
+        if {"private_key", "client_email"}.issubset(c.keys()):
+            return c
     return None
 
 
@@ -67,14 +90,15 @@ INFO_CREDENCIAIS = obter_info_credenciais()
 if INFO_CREDENCIAIS is None:
     st.title("🏠 Despesas de Casa")
     st.error("Não encontrei as credenciais do Google no Secrets deste app.")
+    estrutura = caminhos_de_chaves(st.secrets)
+    st.caption("Estrutura detectada no Secrets (somente nomes, nunca valores): "
+               + (", ".join(estrutura) if estrutura else "nenhuma"))
     st.markdown(
-        "Abra o app, clique em **Manage app** (canto inferior direito) → "
-        "**⋮ → Settings → Secrets**, cole o bloco abaixo preenchido com os "
-        "valores do arquivo JSON baixado do Google Cloud e clique em **Save**:"
+        "No app: **Manage app** (canto inferior direito) → **⋮ → Settings → "
+        "Secrets**, cole o bloco abaixo preenchido com os valores do JSON e "
+        "clique em **Save**:"
     )
     st.code(SECRETS_EXEMPLO, language="toml")
-    st.caption(f"Chaves detectadas no Secrets neste momento: "
-               f"{', '.join(st.secrets.keys()) or 'nenhuma'}")
     st.stop()
 
 
@@ -123,8 +147,6 @@ def carregar_dados() -> pd.DataFrame:
     df["mes"] = df["data"].dt.to_period("M")
     return df
 
-
-dados = carregar_dados()
 
 # ---------- Barra lateral ----------
 st.sidebar.title("🏠 Despesas de Casa")
@@ -176,6 +198,24 @@ if "msg_sucesso" in st.session_state:
 # ---------- Painel ----------
 st.divider()
 st.subheader("📊 Painel de despesas")
+
+try:
+    dados = carregar_dados()
+except Exception as e:
+    st.error("Não consegui acessar a planilha do Google.")
+    st.markdown("Detalhe técnico do erro:")
+    st.code(str(e))
+    st.markdown(
+        "**Causas mais comuns:**\n"
+        "1. A conta de serviço não está compartilhada na planilha — abra a "
+        "planilha → **Compartilhar** → confira se "
+        "`despesas-de-casa@galaxy-watch-assistente-334520.iam.gserviceaccount.com` "
+        "está lá como **Editor**\n"
+        "2. A **Google Sheets API** não está ativada no projeto — no Console "
+        "Google Cloud: **APIs e serviços → Biblioteca** → pesquise *Google "
+        "Sheets API* → **Ativar**"
+    )
+    st.stop()
 
 if dados.empty:
     st.info("Nenhum lançamento ainda. Use o formulário acima para começar!")
