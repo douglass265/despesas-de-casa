@@ -1,5 +1,6 @@
 import gspread
 import pandas as pd
+import plotly.express as px
 import streamlit as st
 from google.oauth2.service_account import Credentials
 
@@ -113,32 +114,40 @@ def ler_aba(nome, renomear):
     return pd.DataFrame(valores[1:], columns=valores[0]).rename(columns=renomear)
 
 
+def _limpar_movimentos(df, colunas_finais):
+    if df.empty:
+        return df
+    df["data"] = converter_datas(df["data"])
+    df["valor"] = df["valor"].map(converter_valor)
+    df = df.dropna(subset=["data", "valor"])
+    df["valor"] = df["valor"].abs()
+    df["mes"] = df["data"].dt.to_period("M")
+    df = df.sort_values("data", ascending=False).reset_index(drop=True)
+    df["_linha"] = df.index + 2
+    return df[colunas_finais + ["_linha"]]
+
+
 @st.cache_data(ttl=300)
 def ler_tudo():
     desp = ler_aba(ABA_DESPESAS, {"Data": "data", "Descrição": "descricao",
                                   "Categoria": "categoria", "Valor (R$)": "valor",
-                                  "Forma de Pagamento": "forma"})
-    if not desp.empty:
-        desp["data"] = converter_datas(desp["data"])
-        desp["valor"] = desp["valor"].map(converter_valor)
-        desp = desp.dropna(subset=["data", "valor"])
-        desp["valor"] = desp["valor"].abs()
-        desp["mes"] = desp["data"].dt.to_period("M")
+                                  "Forma de Pagamento": "forma", "Conta": "conta"})
+    desp = _limpar_movimentos(desp, ["data", "descricao", "categoria",
+                                     "valor", "forma", "conta"])
 
     rec = ler_aba(ABA_RECEITAS, {"Data": "data", "Descrição": "descricao",
-                                 "Categoria": "categoria", "Valor (R$)": "valor"})
-    if not rec.empty:
-        rec["data"] = converter_datas(rec["data"])
-        rec["valor"] = rec["valor"].map(converter_valor)
-        rec = rec.dropna(subset=["data", "valor"])
-        rec["valor"] = rec["valor"].abs()
-        rec["mes"] = rec["data"].dt.to_period("M")
+                                 "Categoria": "categoria", "Valor (R$)": "valor",
+                                 "Conta (recebido em)": "conta"})
+    rec = _limpar_movimentos(rec, ["data", "descricao", "categoria",
+                                   "valor", "conta"])
 
     contas = ler_aba(ABA_CONTAS, {"Banco/Conta": "conta", "Tipo": "tipo",
                                   "Saldo Atual (R$)": "saldo"})
     if not contas.empty:
         contas = contas[contas["conta"] != ""]
         contas["saldo"] = contas["saldo"].map(converter_valor).fillna(0.0)
+        contas = contas.reset_index(drop=True)
+        contas["_linha"] = contas.index + 2
 
     inv = ler_aba(ABA_INVEST, {"Ativo": "ativo", "Classe": "classe",
                                "Quantidade": "qtd", "Preço Médio (R$)": "pm",
@@ -149,6 +158,8 @@ def ler_tudo():
         inv = inv[inv["ativo"] != ""]
         for c in ["qtd", "pm", "pa", "investido", "atual"]:
             inv[c] = inv[c].map(converter_valor).fillna(0.0)
+        inv = inv.reset_index(drop=True)
+        inv["_linha"] = inv.index + 2
     return desp, rec, contas, inv
 
 
@@ -163,8 +174,17 @@ def salvar(aba, valores, ok_msg):
         st.error(f"Não consegui salvar na planilha: {e}")
 
 
+def excluir_linha(aba, numero_linha, ok_msg):
+    try:
+        abrir_planilha().worksheet(aba).delete_rows(numero_linha)
+        st.cache_data.clear()
+        st.session_state["msg_ok"] = ok_msg
+        st.rerun()
+    except Exception as e:
+        st.error(f"Não consegui excluir o lançamento: {e}")
+
+
 def barra_h(df, y, x, titulo):
-    import plotly.express as px
     fig = px.bar(df, x=x, y=y, orientation="h", text=df[x].map(fmt_rs),
                  title=titulo)
     fig.update_layout(xaxis_title=None, yaxis_title=None,
