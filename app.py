@@ -7,6 +7,7 @@ from google.oauth2.service_account import Credentials
 # ---------- Configuração ----------
 st.set_page_config(page_title="Despesas de Casa", page_icon="🏠", layout="wide")
 
+SPREADSHEET_ID = "1sLKJiAJd-rGGCN1Tm5gi5SV6HHM0-v-Jhg6D1NcYaY0"
 ABA_LANCAMENTOS = "Lançamentos"
 
 CATEGORIAS = [
@@ -25,20 +26,65 @@ FORMAS_PAGAMENTO = [
 MESES_PT = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho",
             "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"]
 
+SECRETS_EXEMPLO = '''[connections.gsheets.service_account]
+type = "service_account"
+project_id = "galaxy-watch-assistente-334520"
+private_key_id = "COPIE_DO_JSON"
+private_key = "-----BEGIN PRIVATE KEY-----\\nCOPIE_A_CONTEUDO_DA_CHAVE_AQUI\\n-----END PRIVATE KEY-----\\n"
+client_email = "despesas-de-casa@galaxy-watch-assistente-334520.iam.gserviceaccount.com"
+client_id = "COPIE_DO_JSON"
+auth_uri = "https://accounts.google.com/o/oauth2/auth"
+token_uri = "https://oauth2.googleapis.com/token"
+auth_provider_x509_cert_url = "https://www.googleapis.com/oauth2/v1/certs"
+client_x509_cert_url = "COPIE_DO_JSON"
+universe_domain = "googleapis.com"'''
+
 
 def fmt_rs(v: float) -> str:
     """Formata número no padrão brasileiro: R$ 1.234,56"""
     return f"R$ {v:,.2f}".replace(",", "@").replace(".", ",").replace("@", ".")
 
 
+# ---------- Credenciais (aceita os formatos mais comuns de colagem) ----------
+def obter_info_credenciais():
+    try:
+        return dict(st.secrets["connections.gsheets"]["service_account"])
+    except KeyError:
+        pass
+    try:
+        secao = st.secrets["connections.gsheets"]
+        if {"private_key", "client_email"}.issubset(set(secao.keys())):
+            return dict(secao)
+    except KeyError:
+        pass
+    if {"private_key", "client_email"}.issubset(set(st.secrets.keys())):
+        return dict(st.secrets)
+    return None
+
+
+INFO_CREDENCIAIS = obter_info_credenciais()
+
+if INFO_CREDENCIAIS is None:
+    st.title("🏠 Despesas de Casa")
+    st.error("Não encontrei as credenciais do Google no Secrets deste app.")
+    st.markdown(
+        "Abra o app, clique em **Manage app** (canto inferior direito) → "
+        "**⋮ → Settings → Secrets**, cole o bloco abaixo preenchido com os "
+        "valores do arquivo JSON baixado do Google Cloud e clique em **Save**:"
+    )
+    st.code(SECRETS_EXEMPLO, language="toml")
+    st.caption(f"Chaves detectadas no Secrets neste momento: "
+               f"{', '.join(st.secrets.keys()) or 'nenhuma'}")
+    st.stop()
+
+
 # ---------- Conexão com o Google Sheets ----------
 @st.cache_resource
 def abrir_planilha():
-    info = st.secrets["connections.gsheets"]["service_account"]
     escopos = ["https://www.googleapis.com/auth/spreadsheets"]
-    credenciais = Credentials.from_service_account_info(info, scopes=escopos)
-    cliente = gspread.authorize(credenciais)
-    return cliente.open_by_key(st.secrets["connections.gsheets"]["spreadsheet"])
+    credenciais = Credentials.from_service_account_info(
+        INFO_CREDENCIAIS, scopes=escopos)
+    return gspread.authorize(credenciais).open_by_key(SPREADSHEET_ID)
 
 
 # ---------- Leitura dos dados ----------
@@ -59,10 +105,8 @@ def carregar_dados() -> pd.DataFrame:
     })
     df = df[(df["data"] != "") & (df["valor"] != "")]
 
-    # Data: aceita 10/11/2026 ou 2026-11-10
     df["data"] = pd.to_datetime(df["data"], dayfirst=True, errors="coerce")
 
-    # Valor: aceita 45.9, "45,90" ou "R$ 1.234,56"
     def converter_valor(v):
         t = str(v).replace("R$", "").replace("\u00a0", "").strip()
         try:
