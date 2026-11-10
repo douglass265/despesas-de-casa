@@ -26,7 +26,8 @@ if "msg_ok" in st.session_state:
     st.success(st.session_state.pop("msg_ok"))
 
 st.sidebar.title("🏠 Finanças da Casa")
-pagina = st.sidebar.radio("Navegar", ["📊 Painel", "➕ Lançamentos"])
+pagina = st.sidebar.radio("Navegar", ["📊 Painel", "➕ Lançamentos",
+                                      "📜 Histórico"])
 if st.sidebar.button("🔄 Atualizar dados", use_container_width=True):
     st.cache_data.clear()
     st.rerun()
@@ -34,6 +35,9 @@ if st.sidebar.button("🔄 Atualizar dados", use_container_width=True):
 if pagina == "📊 Painel":
     from painel import render
     render(desp, rec, contas, inv)
-else:
+elif pagina == "➕ Lançamentos":
     from lancamentos import render
     render()
+else:
+    from historico import render
+    render(desp, rec, contas, inv)
