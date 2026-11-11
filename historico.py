@@ -1,9 +1,19 @@
+import pandas as pd
 import streamlit as st
 from helpers import (fmt_rs, MESES_PT, ABA_DESPESAS, ABA_RECEITAS,
-                     ABA_CONTAS, ABA_INVEST, ABA_TRANSF, ABA_COMPRAS,
-                     ABA_DIVID, excluir_linha, ler_tudo, ler_dividendos)
+                     ABA_CONTAS, ABA_INVEST, ABA_VENDAS, ABA_DIVID,
+                     ABA_TRANSF, ABA_COMPRAS, excluir_linha, ler_aba,
+                     ler_tudo, ler_dividendos, ler_vendas, converter_datas,
+                     converter_valor)
 
 LIMITE = 100
+
+
+def _txt(v):
+    if v is None or (isinstance(v, float) and pd.isna(v)):
+        return "—"
+    t = str(v).strip()
+    return t if t and t not in ("nan", "None") else "—"
 
 
 def _seletor_mes(df, chave):
@@ -39,47 +49,48 @@ def _movimentos(df, tipo_nome, aba, tem_forma, prefixo):
         df_f = df_f[df_f["descricao"].str.lower().str.contains(busca, na=False)]
     if cats:
         df_f = df_f[df_f["categoria"].isin(cats)]
-    st.caption(f"{len(df_f)} lançamento(s) — total: "
-               f"**{fmt_rs(df_f['valor'].sum())}**")
     if df_f.empty:
         st.info("Nada encontrado com esses filtros.")
         return
+    st.caption(f"{len(df_f)} lançamento(s) — total: "
+               f"**{fmt_rs(df_f['valor'].sum())}**")
     st.divider()
     df_f = _corte(df_f)
     if tem_forma:
-        cols = st.columns([1.1, 2.6, 1.9, 1.5, 1.5, 1.2, 0.5])
-        rotulos = ["Data", "Descrição", "Categoria", "Conta", "Forma",
-                   "Valor", ""]
+        cols = st.columns([1.1, 3.2, 1.6, 1.4, 1.2, 0.5])
+        rots = ["Data", "Descrição", "Conta", "Pagamento", "Valor", ""]
     else:
-        cols = st.columns([1.1, 3.2, 2.2, 1.6, 1.4, 0.5])
-        rotulos = ["Data", "Descrição", "Categoria", "Conta", "Valor", ""]
-    for c, rot in zip(cols, rotulos):
+        cols = st.columns([1.1, 3.6, 1.8, 1.4, 0.5])
+        rots = ["Data", "Descrição", "Conta", "Valor", ""]
+    for c, rot in zip(cols, rots):
         c.markdown(f"**{rot}**")
-    for _, r in df_f.iterrows():
-        if tem_forma:
-            cs = st.columns([1.1, 2.6, 1.9, 1.5, 1.5, 1.2, 0.5])
-            cs[0].write(r["data"].strftime("%d/%m/%Y"))
-            cs[1].write(r["descricao"])
-            cs[2].write(r["categoria"])
-            cs[3].write(r["conta"] if r.get("conta") else "—")
-            cs[4].write(r["forma"] if r.get("forma") else "—")
-            cs[5].write(fmt_rs(r["valor"]))
-            botao = cs[6]
-        else:
-            cs = st.columns([1.1, 3.2, 2.2, 1.6, 1.4, 0.5])
-            cs[0].write(r["data"].strftime("%d/%m/%Y"))
-            cs[1].write(r["descricao"])
-            cs[2].write(r["categoria"])
-            cs[3].write(r["conta"] if r.get("conta") else "—")
-            cs[4].write(fmt_rs(r["valor"]))
-            botao = cs[5]
-        if botao.button("🗑️", key=f"{prefixo}_{int(r['_linha'])}",
-                        help="Excluir este lançamento"):
-            excluir_linha(aba, int(r["_linha"]),
-                          f"🗑️ Lançamento excluído: {r['descricao']}")
+    totais = (df_f.groupby("categoria")["valor"].sum()
+              .sort_values(ascending=False))
+    for cat in totais.index:
+        g = df_f[df_f["categoria"] == cat].sort_values("data", ascending=False)
+        st.markdown(f"**{cat}** — {fmt_rs(totais[cat])}")
+        for _, r in g.iterrows():
+            if tem_forma:
+                cs = st.columns([1.1, 3.2, 1.6, 1.4, 1.2, 0.5])
+                cs[0].write(r["data"].strftime("%d/%m/%Y"))
+                cs[1].write(r["descricao"])
+                cs[2].write(_txt(r.get("conta")))
+                cs[3].write(_txt(r.get("forma")))
+                cs[4].write(fmt_rs(r["valor"]))
+                botao = cs[5]
+            else:
+                cs = st.columns([1.1, 3.6, 1.8, 1.4, 0.5])
+                cs[0].write(r["data"].strftime("%d/%m/%Y"))
+                cs[1].write(r["descricao"])
+                cs[2].write(_txt(r.get("conta")))
+                cs[3].write(fmt_rs(r["valor"]))
+                botao = cs[4]
+            if botao.button("🗑️", key=f"{prefixo}_{int(r['_linha'])}",
+                            help="Excluir este lançamento"):
+                excluir_linha(aba, int(r["_linha"]),
+                              f"🗑️ Lançamento excluído: {r['descricao']}")
     st.caption("A exclusão é imediata e não pode ser desfeita. Para corrigir "
                "um lançamento, exclua e lance de novo com os dados certos.")
-
 
 def _transferencias(transf):
     if transf.empty:
@@ -102,7 +113,7 @@ def _transferencias(transf):
     for _, r in df_f.iterrows():
         cs = st.columns([1.1, 2.2, 2.4, 1.4, 0.5])
         cs[0].write(r["data"].strftime("%d/%m/%Y"))
-        cs[1].write(r["descricao"] if r["descricao"] else "—")
+        cs[1].write(_txt(r["descricao"]))
         cs[2].write(f"🔁 {r['da_conta']} → {r['para_conta']}")
         cs[3].write(fmt_rs(r["valor"]))
         if cs[4].button("🗑️", key=f"t_{int(r['_linha'])}",
@@ -118,41 +129,39 @@ def _compras(compras):
     compras = compras.copy()
     compras["mes"] = compras["data"].dt.to_period("M")
     mes_sel = _seletor_mes(compras, "mes_c")
-    f1, f2 = st.columns([3, 2])
-    busca = f1.text_input("🔎 Buscar por palavra na descrição",
+    busca = st.text_input("🔎 Buscar por palavra na descrição",
                           key="busca_c").strip().lower()
-    cartoes_f = f2.multiselect("Filtrar cartão",
-                               sorted(compras["cartao"].unique()),
-                               key="cartao_c")
     df_f = compras if mes_sel is None else compras[compras["mes"] == mes_sel]
     if busca:
         df_f = df_f[df_f["descricao"].str.lower().str.contains(busca, na=False)]
-    if cartoes_f:
-        df_f = df_f[df_f["cartao"].isin(cartoes_f)]
-    st.caption(f"{len(df_f)} compra(s) — valor total: "
-               f"**{fmt_rs(df_f['valor'].sum())}**")
     if df_f.empty:
         st.info("Nada encontrado com esses filtros.")
         return
+    st.caption(f"{len(df_f)} compra(s) — valor total: "
+               f"**{fmt_rs(df_f['valor'].sum())}**")
     st.divider()
     df_f = _corte(df_f)
-    cols = st.columns([1.1, 2.6, 1.6, 1.9, 1.0, 1.2, 0.5])
-    for c, rot in zip(cols, ["Data", "Descrição", "Cartão", "Categoria",
-                             "Parcelas", "Valor", ""]):
+    cols = st.columns([1.1, 3.0, 1.6, 1.2, 1.2, 0.5])
+    for c, rot in zip(cols, ["Data", "Descrição", "Cartão", "Parcelas",
+                             "Valor", ""]):
         c.markdown(f"**{rot}**")
-    for _, r in df_f.iterrows():
-        cs = st.columns([1.1, 2.6, 1.6, 1.9, 1.0, 1.2, 0.5])
-        cs[0].write(r["data"].strftime("%d/%m/%Y"))
-        cs[1].write(r["descricao"])
-        cs[2].write(r["cartao"])
-        cs[3].write(r["categoria"])
-        cs[4].write(f"{int(r['parcelas'])}x" if int(r["parcelas"]) > 1
-                    else "à vista")
-        cs[5].write(fmt_rs(r["valor"]))
-        if cs[6].button("🗑️", key=f"c_{int(r['_linha'])}",
-                        help="Excluir esta compra"):
-            excluir_linha(ABA_COMPRAS, int(r["_linha"]),
-                          f"🗑️ Compra excluída: {r['descricao']}")
+    totais = (df_f.groupby("categoria")["valor"].sum()
+              .sort_values(ascending=False))
+    for cat in totais.index:
+        g = df_f[df_f["categoria"] == cat].sort_values("data", ascending=False)
+        st.markdown(f"**{cat}** — {fmt_rs(totais[cat])}")
+        for _, r in g.iterrows():
+            cs = st.columns([1.1, 3.0, 1.6, 1.2, 1.2, 0.5])
+            cs[0].write(r["data"].strftime("%d/%m/%Y"))
+            cs[1].write(r["descricao"])
+            cs[2].write(r["cartao"])
+            npar = int(r["parcelas"]) if r["parcelas"] else 1
+            cs[3].write(f"{npar}x" if npar > 1 else "à vista")
+            cs[4].write(fmt_rs(r["valor"]))
+            if cs[5].button("🗑️", key=f"c_{int(r['_linha'])}",
+                            help="Excluir esta compra"):
+                excluir_linha(ABA_COMPRAS, int(r["_linha"]),
+                              f"🗑️ Compra excluída: {r['descricao']}")
     st.caption("O valor mostrado é o total da compra; as parcelas entram "
                "nas faturas dos meses seguintes — veja em 💳 Cartões.")
 
@@ -182,16 +191,12 @@ def _dividendos(div):
         cs = st.columns([1.1, 2.6, 2.6, 1.4, 0.5])
         cs[0].write(r["data"].strftime("%d/%m/%Y"))
         cs[1].write(r["ativo"])
-        cs[2].write(r["conta"] if r.get("conta") else "—")
+        cs[2].write(_txt(r.get("conta")))
         cs[3].write(fmt_rs(r["valor"]))
         if cs[4].button("🗑️", key=f"div_{int(r['_linha'])}",
                         help="Excluir este dividendo"):
             excluir_linha(ABA_DIVID, int(r["_linha"]),
                           f"🗑️ Dividendo excluído: {r['ativo']}")
-    st.caption("Os dividendos alimentam a rentabilidade com proventos na "
-               "carteira do 📊 Painel. Para o dinheiro entrar no saldo de "
-               "uma conta, lance também uma 💰 Receita com a categoria "
-               "\"Dividendos\".")
 
 
 def _contas(contas):
@@ -215,28 +220,72 @@ def _contas(contas):
             excluir_linha(ABA_CONTAS, int(r["_linha"]),
                           f"🗑️ Conta excluída: {r['conta']}")
     st.caption("Saldo atual = saldo inicial + receitas − despesas "
-               "+ transferências recebidas − transferências enviadas. "
+               "+ transferências recebidas − transferências enviadas "
+               "+ vendas recebidas − investimentos debitados. "
                "Para ajustar o Saldo inicial, edite na planilha (aba Contas).")
 
 
-def _investimentos(inv):
-    if inv.empty:
-        st.info("Nenhum investimento cadastrado.")
+def _investimentos():
+    compras_inv = ler_aba(ABA_INVEST, {
+        "Ativo": "ativo", "Classe": "classe", "Quantidade": "qtd",
+        "Total Investido (R$)": "investido",
+        "Data da Aplicação": "data_apl", "Conta de Origem": "conta"})
+    vendas = ler_vendas()
+    linhas = []
+    if not compras_inv.empty:
+        compras_inv["_linha"] = compras_inv.index + 2
+        compras_inv = compras_inv[compras_inv["ativo"] != ""]
+        for _, r in compras_inv.iterrows():
+            d = converter_datas(pd.Series([r["data_apl"]])).iloc[0]
+            linhas.append({
+                "data": d, "acao": "🛒 Compra", "ativo": r["ativo"],
+                "classe": r["classe"], "qtd": converter_valor(r["qtd"]) or 0.0,
+                "valor": converter_valor(r["investido"]) or 0.0,
+                "conta": r.get("conta"), "aba": ABA_INVEST,
+                "linha": int(r["_linha"])})
+    if not vendas.empty:
+        for _, r in vendas.iterrows():
+            linhas.append({
+                "data": r["data"], "acao": "📤 Venda", "ativo": r["ativo"],
+                "classe": "—", "qtd": float(r["qtd"]),
+                "valor": float(r["valor"]), "conta": r.get("conta_dest"),
+                "aba": ABA_VENDAS, "linha": int(r["_linha"])})
+    if not linhas:
+        st.info("Nenhum investimento ou venda lançado ainda.")
         return
-    st.caption(f"Carteira: investido **{fmt_rs(inv['investido'].sum())}** · "
-               f"valor atual **{fmt_rs(inv['atual'].sum())}**")
-    for _, r in inv.iterrows():
-        cs = st.columns([2, 1.8, 1, 1.2, 1.2, 1.4, 0.5])
-        cs[0].write(r["ativo"])
-        cs[1].write(r["classe"])
-        cs[2].write(f"{r['qtd']:g}")
-        cs[3].write(fmt_rs(r["pm"]))
-        cs[4].write(fmt_rs(r["pa"]))
-        cs[5].write(fmt_rs(r["atual"]))
-        if cs[6].button("🗑️", key=f"inv_{int(r['_linha'])}",
-                        help="Excluir este ativo"):
-            excluir_linha(ABA_INVEST, int(r["_linha"]),
-                          f"🗑️ Investimento excluído: {r['ativo']}")
+    for l in linhas:
+        l["chave"] = pd.Timestamp.min if pd.isna(l["data"]) else l["data"]
+    linhas.sort(key=lambda x: x["chave"], reverse=True)
+    if len(linhas) > LIMITE:
+        st.caption(f"Mostrando os {LIMITE} movimentos mais recentes.")
+        linhas = linhas[:LIMITE]
+    n_compras = sum(1 for l in linhas if l["acao"] == "🛒 Compra")
+    tot_c = sum(l["valor"] for l in linhas if l["acao"] == "🛒 Compra")
+    tot_v = sum(l["valor"] for l in linhas if l["acao"] == "📤 Venda")
+    st.caption(f"{n_compras} compra(s) e {len(linhas) - n_compras} venda(s) — "
+               f"comprado: **{fmt_rs(tot_c)}** · vendido: **{fmt_rs(tot_v)}**")
+    st.divider()
+    cols = st.columns([1.0, 1.2, 2.0, 1.6, 0.8, 1.2, 1.4, 0.5])
+    for c, rot in zip(cols, ["Data", "Ação", "Ativo", "Classe", "Qtd",
+                             "Valor", "Conta", ""]):
+        c.markdown(f"**{rot}**")
+    for l in linhas:
+        cs = st.columns([1.0, 1.2, 2.0, 1.6, 0.8, 1.2, 1.4, 0.5])
+        cs[0].write("—" if pd.isna(l["data"])
+                    else l["data"].strftime("%d/%m/%Y"))
+        cs[1].write(l["acao"])
+        cs[2].write(l["ativo"])
+        cs[3].write(_txt(l["classe"]))
+        cs[4].write(f"{l['qtd']:g}")
+        cs[5].write(fmt_rs(l["valor"]))
+        cs[6].write(_txt(l["conta"]))
+        if cs[7].button("🗑️", key=f"mvt_{l['aba']}_{l['linha']}",
+                        help="Excluir este lançamento"):
+            excluir_linha(l["aba"], l["linha"],
+                          f"🗑️ {l['acao']} excluída: {l['ativo']}")
+    st.caption("Cada linha é um movimento individual (um aporte ou uma "
+               "venda) — dá para excluir um por vez. Excluir uma venda "
+               "devolve o valor ao saldo da conta automaticamente.")
 
 
 def render(desp, rec, contas, inv):
@@ -259,4 +308,4 @@ def render(desp, rec, contas, inv):
     elif tipo == "🏦 Contas":
         _contas(contas)
     else:
-        _investimentos(inv)
+        _investimentos()
