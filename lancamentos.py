@@ -186,31 +186,29 @@ def _form_investimento():
     dol = cotacao_dolar()
     if dol:
         st.caption(f"💵 Cotação do dólar hoje: R$ {dol:.2f}")
+    classe = st.selectbox("Classe do investimento", CLASSES)
+    moeda = "US$" if classe in CLASSES_MOEDA_USD else "R$"
     with st.form("f_inv", clear_on_submit=True):
-        c1, c2 = st.columns(2)
-        ativo = c1.text_input("Ativo (ex.: PETR4, HGLG11, IVVB11, AAPL, CDB Inter)")
-        classe = c2.selectbox("Classe", CLASSES)
-        moeda = "US$" if classe in CLASSES_MOEDA_USD else "R$"
+        ativo = st.text_input(
+            "Ativo (ex.: PETR4, HGLG11, IVVB11, AAPL, CDB Inter)")
         c3, c4 = st.columns(2)
         qtd = c3.number_input("Quantidade", min_value=0.0, format="%.4f")
-        pm = c4.number_input(f"Preço médio ({moeda})", min_value=0.0, format="%.2f")
+        pm = c4.number_input(f"Preço médio ({moeda})", min_value=0.0,
+                             format="%.2f")
         pa = st.number_input(f"Preço atual ({moeda})", min_value=0.0,
                              format="%.2f")
         pct_cdi = 0.0
         data_apl = None
         if classe in CLASSES_RENDA_FIXA:
+            st.caption("💡 Para CDB/renda fixa: use **Quantidade 1** e o "
+                       "valor aplicado no **Preço médio** — o valor atual "
+                       "é calculado sozinho pelo % do CDI (aparece no Painel).")
             c5, c6 = st.columns(2)
             pct_cdi = c5.number_input("% do CDI contratada", min_value=0.0,
-                                      max_value=300.0, value=100.0, step=5.0,
-                                      format="%.1f")
+                                      max_value=300.0, value=100.0,
+                                      step=5.0, format="%.1f")
             data_apl = c6.date_input("Data da aplicação", format="DD/MM/YYYY",
                                      key="dapl")
-            dias = max((date.today() - data_apl).days, 1)
-            cdi_info = cdi_do_periodo(dias)
-            if cdi_info is not None and pm > 0:
-                est = pm * (1.0 + (cdi_info / 100.0) * (pct_cdi / 100.0))
-                st.caption(f"CDI acumulado em {dias} dias: {cdi_info:.2f}% — "
-                           f"valor estimado hoje: {est:.2f}")
         if st.form_submit_button("💾 Salvar investimento", type="primary",
                                  use_container_width=True):
             if ativo.strip() and qtd > 0:
@@ -222,8 +220,6 @@ def _form_investimento():
                        f"✅ Investimento salvo: {ativo.strip()}")
             else:
                 st.error("Informe o ativo e a quantidade.")
-
-
 def _form_conta():
     st.caption("O saldo é calculado automaticamente: preencha o **Saldo "
                "Inicial** com o valor que a conta tinha antes dos lançamentos.")
