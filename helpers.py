@@ -48,22 +48,35 @@ def fmt_pct(v):
     return ("+" if v >= 0 else "") + f"{v:,.2f}%".replace(",", "@").replace(".", ",").replace("@", ".")
 
 
-@st.cache_data(ttl=21600)
+@st.cache_data(ttl=3600)
 def cdi_do_periodo(dias):
-    """CDI acumulado no período (pro rata die), igual aos bancos."""
+    """CDI acumulado no período (pro rata die), igual aos bancos.
+    Tenta a API do Banco Central de duas formas antes de desistir."""
     fim = date.today()
     ini = fim - timedelta(days=dias)
-    u = (f"https://api.bcb.gov.br/dados/serie/bcdata.sgp.11/dados"
+    urls = [
+        (f"https://api.bcb.gov.br/dados/serie/bcdata.sgp.11/dados"
          f"?formato=json&dataInicial={ini.strftime('%d/%m/%Y')}"
-         f"&dataFinal={fim.strftime('%d/%m/%Y')}")
-    try:
-        dados = requests.get(u, timeout=15).json()
-        acum = 1.0
-        for d in dados:
-            acum *= 1.0 + float(str(d["valor"]).replace(",", ".")) / 100.0
-        return (acum - 1.0) * 100.0
-    except Exception:
-        return None
+         f"&dataFinal={fim.strftime('%d/%m/%Y')}"),
+        (f"https://api.bcb.gov.br/dados/serie/bcdata.sgp.11/dados"
+         f"/ultimos/500?formato=json"),
+    ]
+    for u in urls:
+        try:
+            dados = requests.get(u, timeout=15).json()
+            if not dados:
+                continue
+            acum = 1.0
+            for d in dados:
+                if "data" in d:
+                    dd = pd.to_datetime(d["data"], dayfirst=True).date()
+                    if dd < ini or dd > fim:
+                        continue
+                acum *= 1.0 + float(str(d["valor"]).replace(",", ".")) / 100.0
+            return (acum - 1.0) * 100.0
+        except Exception:
+            continue
+    return None
 
 
 @st.cache_data(ttl=3600)
@@ -289,7 +302,6 @@ def rentabilidade_total_row(r, div_ativo):
     div = float(div_ativo) if div_ativo else 0.0
     return var + (div / inv) * 100.0
 
-
 @st.cache_data(ttl=300)
 def ler_dividendos():
     d = ler_aba(ABA_DIVID, {"Data": "data", "Ativo": "ativo",
@@ -423,7 +435,34 @@ def ler_tudo():
             contas["saldo"] = contas.apply(
                 lambda r: r["saldo"] - float(inv_saidas.get(r["conta"], 0.0)),
                 axis=1)
+        grupos = []
+        for (ativo, classe), g in inv.groupby(["ativo", "classe"],
+                                              sort=False):
+            qtd_t = float(g["qtd"].sum())
+            inv_t = round(float(g["investido"].sum()), 2)
+            at_t = round(float(g["atual"].sum()), 2)
+            pm_t = (round(float((g["qtd"] * g["pm"]).sum() / qtd_t), 2)
+                    if qtd_t > 0 else round(float(g["pm"].mean()), 2))
+            if classe in CLASSES_RENDA_FIXA and qtd_t > 0:
+                pa_t = round(at_t / qtd_t, 2)
+            elif qtd_t > 0:
+                pa_t = round(float((g["qtd"] * g["pa"]).sum() / qtd_t), 2)
+            else:
+                pa_t = round(float(g["pa"].mean()), 2)
+            com_cdi = g.loc[g["pct_cdi"] > 0, "pct_cdi"]
+            pct = float(com_cdi.iloc[0]) if not com_cdi.empty else 0.0
+            orig = ", ".join(sorted({str(x) for x in g["conta_orig"]
+                                     if str(x) and str(x) not in ("nan", "None")}))
+            grupos.append({
+                "ativo": ativo, "classe": classe, "qtd": round(qtd_t, 4),
+                "pm": pm_t, "pa": pa_t, "investido": inv_t, "atual": at_t,
+                "pct_cdi": pct, "data_apl": g["data_apl"].min(),
+                "conta_orig": orig,
+                "_linha": int(g["_linha"].iloc[0])})
+        inv = pd.DataFrame(grupos)
     return desp, rec, contas, inv, transf, cartoes, compras
+
+
 def salvar(aba, valores, ok_msg):
     try:
         abrir_planilha().worksheet(aba).append_row(
