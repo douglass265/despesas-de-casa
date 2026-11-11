@@ -2,7 +2,8 @@ import pandas as pd
 import plotly.express as px
 import streamlit as st
 from datetime import date
-from helpers import fmt_rs, fmt_pct, barra_h, MESES_PT
+from helpers import (fmt_rs, fmt_pct, barra_h, MESES_PT, ler_tudo,
+                     calcular_faturas)
 
 
 def render(desp, rec, contas, inv):
@@ -24,6 +25,26 @@ def render(desp, rec, contas, inv):
     p1.metric("🏠 Patrimônio total", fmt_rs(total_contas + val_atual))
     p2.metric(f"⚖️ Saldo de {MESES_PT[hoje.month - 1]} (rec. − desp.)",
               fmt_rs(rec_mes - desp_mes))
+
+    # ----- Faturas a pagar (cartões) -----
+    _, _, _, _, _, cartoes_f, compras_f = ler_tudo()
+    faturas = calcular_faturas(cartoes_f, compras_f)
+    if faturas:
+        st.divider()
+        st.subheader("💳 Faturas a pagar")
+        for i in range(0, len(faturas), 4):
+            grupo = faturas[i:i + 4]
+            cols = st.columns(len(grupo))
+            for col, f in zip(cols, grupo):
+                prox = f["faturas"][0] if f["faturas"] else None
+                total_prox = prox["total"] if prox else 0.0
+                if prox and total_prox > 0:
+                    delta = f"vence {prox['vencimento'].strftime('%d/%m')}"
+                else:
+                    delta = "nada a pagar"
+                col.metric(f"💳 {f['cartao']}", fmt_rs(total_prox),
+                           delta=delta, delta_color="off")
+                col.caption(f"Limite disponível: {fmt_rs(f['disponivel'])}")
 
     st.divider()
     st.subheader("📈 Minha carteira")
@@ -66,7 +87,8 @@ def render(desp, rec, contas, inv):
         with cc1:
             st.plotly_chart(
                 barra_h(contas.sort_values("saldo"), "conta", "saldo",
-                        "Saldo por conta"), use_container_width=True)
+                        "Saldo por conta (calculado)"),
+                use_container_width=True)
         with cc2:
             st.dataframe(
                 contas[["conta", "tipo", "saldo"]],
@@ -145,22 +167,23 @@ def render(desp, rec, contas, inv):
             else:
                 st.dataframe(
                     d_f.sort_values("data", ascending=False)[
-                        ["data", "descricao", "categoria", "valor", "forma"]],
+                        ["data", "descricao", "categoria", "valor", "forma", "conta"]],
                     use_container_width=True, hide_index=True,
                     column_config={
                         "data": st.column_config.DateColumn("Data", format="DD/MM/YYYY"),
                         "descricao": "Descrição", "categoria": "Categoria",
                         "valor": st.column_config.NumberColumn("Valor (R$)", format="R$ %.2f"),
-                        "forma": "Pagamento"})
+                        "forma": "Pagamento", "conta": "Conta"})
         with abas[1]:
             if r_f.empty:
                 st.info("Nenhuma receita.")
             else:
                 st.dataframe(
                     r_f.sort_values("data", ascending=False)[
-                        ["data", "descricao", "categoria", "valor"]],
+                        ["data", "descricao", "categoria", "valor", "conta"]],
                     use_container_width=True, hide_index=True,
                     column_config={
                         "data": st.column_config.DateColumn("Data", format="DD/MM/YYYY"),
                         "descricao": "Descrição", "categoria": "Categoria",
-                        "valor": st.column_config.NumberColumn("Valor (R$)", format="R$ %.2f")})
+                        "valor": st.column_config.NumberColumn("Valor (R$)", format="R$ %.2f"),
+                        "conta": "Conta"})
