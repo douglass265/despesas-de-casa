@@ -395,7 +395,8 @@ def ler_tudo():
                                "Total Investido (R$)": "investido",
                                "Valor Atual (R$)": "atual",
                                "% do CDI": "pct_cdi",
-                               "Data da Aplicação": "data_apl"})
+                               "Data da Aplicação": "data_apl",
+                               "Conta de Origem": "conta_orig"})
     if not inv.empty:
         inv = inv[inv["ativo"] != ""]
         for c in ["qtd", "pm", "pa", "investido", "atual", "pct_cdi"]:
