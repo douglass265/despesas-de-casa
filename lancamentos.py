@@ -1,8 +1,11 @@
 import streamlit as st
+from datetime import date
 from helpers import (CATEGORIAS_DESPESA, CATEGORIAS_RECEITA, FORMAS_PAGAMENTO,
-                     CLASSES, BANDEIRAS, ABA_DESPESAS, ABA_RECEITAS,
-                     ABA_CONTAS, ABA_INVEST, ABA_CARTOES, ABA_COMPRAS,
-                     ABA_TRANSF, salvar, abrir_planilha)
+                     CLASSES, BANDEIRAS, CLASSES_MOEDA_USD, CLASSES_RENDA_FIXA,
+                     ABA_DESPESAS, ABA_RECEITAS, ABA_CONTAS, ABA_INVEST,
+                     ABA_CARTOES, ABA_COMPRAS, ABA_TRANSF, ABA_DIVID,
+                     salvar, abrir_planilha, cotacao_dolar, cdi_do_periodo,
+                     fmt_rs)
 
 TIPOS_CONTA = ["Conta corrente", "Conta digital/Pix", "Poupança",
                "Cartão de crédito", "Dinheiro", "Outro"]
@@ -21,6 +24,15 @@ def listar_contas():
 def listar_cartoes():
     try:
         valores = abrir_planilha().worksheet(ABA_CARTOES).get_all_values()
+        return [l[0].strip() for l in valores[1:] if l and l[0].strip()]
+    except Exception:
+        return []
+
+
+@st.cache_data(ttl=300)
+def listar_ativos():
+    try:
+        valores = abrir_planilha().worksheet(ABA_INVEST).get_all_values()
         return [l[0].strip() for l in valores[1:] if l and l[0].strip()]
     except Exception:
         return []
@@ -144,68 +156,24 @@ def _form_cadastro_cartao(opcoes_conta):
                 st.error("Escreva o apelido do cartão.")
 
 
-def _form_conta():
-    st.caption("O saldo é calculado automaticamente: preencha o **Saldo "
-               "Inicial** com o valor que a conta tinha antes dos lançamentos.")
-    with st.form("f_conta", clear_on_submit=True):
-        nome = st.text_input("Banco / Conta (ex.: Nubank)")
+def _form_dividendo(ativos, contas):
+    if not ativos:
+        st.info("Nenhum ativo na carteira ainda — cadastre em 📈 Investimento.")
+    with st.form("f_divid", clear_on_submit=True):
         c1, c2 = st.columns(2)
-        tipo = c1.selectbox("Tipo", TIPOS_CONTA)
-        saldo = c2.number_input("Saldo inicial (R$)", format="%.2f")
-        if st.form_submit_button("💾 Salvar conta", type="primary",
-                                 use_container_width=True):
-            if nome.strip():
-                salvar(ABA_CONTAS, [nome.strip(), tipo, round(saldo, 2)],
-                       f"✅ Conta salva: {nome.strip()}")
-            else:
-                st.error("Escreva o nome da conta.")
-
-
-def _form_investimento():
-    with st.form("f_inv", clear_on_submit=True):
-        c1, c2 = st.columns(2)
-        ativo = c1.text_input("Ativo (ex.: PETR4, HGLG11, CDB Inter)")
-        classe = c2.selectbox("Classe", CLASSES)
-        c3, c4, c5 = st.columns(3)
-        qtd = c3.number_input("Quantidade", min_value=0.0, format="%.4f")
-        pm = c4.number_input("Preço médio (R$)", min_value=0.0, format="%.2f")
-        pa = c5.number_input("Preço atual (R$)", min_value=0.0, format="%.2f")
-        if st.form_submit_button("💾 Salvar investimento", type="primary",
-                                 use_container_width=True):
-            if ativo.strip() and qtd > 0:
-                salvar(ABA_INVEST,
-                       [ativo.strip(), classe, round(qtd, 4), round(pm, 2),
-                        round(pa, 2), round(qtd * pm, 2), round(qtd * pa, 2)],
-                       f"✅ Investimento salvo: {ativo.strip()}")
-            else:
-                st.error("Informe o ativo e a quantidade.")
-
-
-def render():
-    st.subheader("➕ Lançamentos")
-    aba = st.radio("Tipo de lançamento",
-                   ["💸 Despesa", "💰 Receita", "🔁 Transferência",
-                    "💳 Cartão", "🏦 Conta", "📈 Investimento"],
-                   horizontal=True, label_visibility="collapsed")
-    contas = listar_contas()
-    opcoes_conta = ["(sem conta)"] + contas
-    cartoes = listar_cartoes()
-
-    if aba == "💸 Despesa":
-        _form_despesa(opcoes_conta)
-    elif aba == "💰 Receita":
-        _form_receita(opcoes_conta)
-    elif aba == "🔁 Transferência":
-        _form_transferencia(contas)
-    elif aba == "💳 Cartão":
-        sub = st.radio("O que você quer lançar?",
-                       ["🛍️ Compra no cartão", "💳 Cadastrar cartão"],
-                       horizontal=True, key="sub_cartao")
-        if sub == "🛍️ Compra no cartão":
-            _form_compra_cartao(cartoes)
+        data = c1.date_input("Data do crédito", format="DD/MM/YYYY", key="dd")
+        valor = c2.number_input("Valor (R$)", min_value=0.01, format="%.2f",
+                                key="vd")
+        if ativos:
+            ativo = st.selectbox("Ativo", ativos, key="da_s")
         else:
-            _form_cadastro_cartao(opcoes_conta)
-    elif aba == "🏦 Conta":
-        _form_conta()
-    else:
-        _form_investimento()
+            ativo = st.text_input("Ativo (ex.: PETR4, MXRF11)", key="da_t")
+        conta_sel = st.selectbox("Conta onde caiu (informativo)",
+                                 ["(nenhuma)"] + contas, key="dc")
+        if st.form_submit_button("💾 Salvar dividendo", type="primary",
+                                 use_container_width=True):
+            if ativo and str(ativo).strip():
+                salvar(ABA_DIVID,
+                       [data.strftime("%d/%m/%Y"), str(ativo).strip(),
+                        round(valor, 2),
+                        "" if 
