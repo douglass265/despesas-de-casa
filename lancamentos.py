@@ -1,11 +1,11 @@
 import streamlit as st
 from datetime import date
 from helpers import (CATEGORIAS_DESPESA, CATEGORIAS_RECEITA, FORMAS_PAGAMENTO,
-                     CLASSES, BANDEIRAS, CLASSES_MOEDA_USD, CLASSES_RENDA_FIXA,
-                     ABA_DESPESAS, ABA_RECEITAS, ABA_CONTAS, ABA_INVEST,
-                     ABA_CARTOES, ABA_COMPRAS, ABA_TRANSF, ABA_DIVID,
-                     salvar, abrir_planilha, cotacao_dolar, cdi_do_periodo,
-                     fmt_rs)
+                     CLASSES, CLASSES_MOEDA_USD, CLASSES_RENDA_FIXA,
+                     BANDEIRAS, ABA_DESPESAS, ABA_RECEITAS, ABA_CONTAS,
+                     ABA_INVEST, ABA_CARTOES, ABA_COMPRAS, ABA_TRANSF,
+                     ABA_DIVID, salvar, abrir_planilha, cotacao_dolar,
+                     cdi_do_periodo)
 
 TIPOS_CONTA = ["Conta corrente", "Conta digital/Pix", "Poupança",
                "Cartão de crédito", "Dinheiro", "Outro"]
@@ -155,6 +155,7 @@ def _form_cadastro_cartao(opcoes_conta):
             else:
                 st.error("Escreva o apelido do cartão.")
 
+
 def _form_dividendo(ativos, contas):
     if not ativos:
         st.info("Nenhum ativo na carteira ainda — cadastre em 📈 Investimento.")
@@ -209,7 +210,7 @@ def _form_investimento():
             if cdi_info is not None and pm > 0:
                 est = pm * (1.0 + (cdi_info / 100.0) * (pct_cdi / 100.0))
                 st.caption(f"CDI acumulado em {dias} dias: {cdi_info:.2f}% — "
-                           f"valor estimado hoje: R$ {est:,.2f}")
+                           f"valor estimado hoje: {est:.2f}")
         if st.form_submit_button("💾 Salvar investimento", type="primary",
                                  use_container_width=True):
             if ativo.strip() and qtd > 0:
@@ -272,7 +273,3 @@ def render():
         _form_conta()
     else:
         _form_investimento()
-                salvar(ABA_DIVID,
-                       [data.strftime("%d/%m/%Y"), str(ativo).strip(),
-                        round(valor, 2),
-                        "" if 
