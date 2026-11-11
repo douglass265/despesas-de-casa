@@ -10,7 +10,7 @@ SPREADSHEET_ID = "1sLKJiAJd-rGGCN1Tm5gi5SV6HHM0-v-Jhg6D1NcYaY0"
 ABA_DESPESAS, ABA_RECEITAS = "Despesas", "Receitas"
 ABA_CONTAS, ABA_INVEST = "Contas", "Investimentos"
 ABA_CARTOES, ABA_COMPRAS, ABA_TRANSF = "Cartões", "Compras Cartão", "Transferências"
-ABA_DIVID = "Dividendos"
+ABA_DIVID, ABA_VENDAS = "Dividendos", "Vendas"
 
 CATEGORIAS_DESPESA = [
     "Alimentação (fora de casa)", "Mercado/Supermercado", "Aluguel/Condomínio",
@@ -58,12 +58,14 @@ def cdi_do_periodo(dias):
         (f"https://api.bcb.gov.br/dados/serie/bcdata.sgp.11/dados"
          f"?formato=json&dataInicial={ini.strftime('%d/%m/%Y')}"
          f"&dataFinal={fim.strftime('%d/%m/%Y')}"),
-        (f"https://api.bcb.gov.br/dados/serie/bcdata.sgp.11/dados"
-         f"/ultimos/500?formato=json"),
+        ("https://api.bcb.gov.br/dados/serie/bcdata.sgp.11/dados"
+         "/ultimos/500?formato=json"),
     ]
+    cab = {"User-Agent": "Mozilla/5.0 (compatible; FinancasDaCasa/1.0)",
+           "Accept": "application/json"}
     for u in urls:
         try:
-            dados = requests.get(u, timeout=15).json()
+            dados = requests.get(u, timeout=20, headers=cab).json()
             if not dados:
                 continue
             acum = 1.0
@@ -320,6 +322,44 @@ def ler_dividendos():
 
 
 @st.cache_data(ttl=300)
+def ler_vendas():
+    v = ler_aba(ABA_VENDAS, {"Data": "data", "Ativo": "ativo",
+                             "Quantidade": "qtd", "Valor Total (R$)": "valor",
+                             "Conta de Destino": "conta_dest",
+                             "Observação": "obs"})
+    if v.empty:
+        return v
+    v = v[v["ativo"] != ""]
+    v["data"] = converter_datas(v["data"])
+    v["valor"] = v["valor"].map(converter_valor)
+    v["qtd"] = v["qtd"].map(converter_valor).fillna(0.0)
+    v = v.dropna(subset=["data", "valor"])
+    v["valor"] = v["valor"].abs()
+    v["mes"] = v["data"].dt.to_period("M")
+    v = v.sort_values("data", ascending=False).reset_index(drop=True)
+    v["_linha"] = v.index + 2
+    return v[["data", "ativo", "qtd", "valor", "conta_dest", "obs",
+              "mes", "_linha"]]
+
+
+@st.cache_data(ttl=300)
+def listar_posicoes():
+    """Posições atuais (agrupadas) para o formulário de venda."""
+    try:
+        _, _, _, inv, _, _, _ = ler_tudo()
+    except Exception:
+        return []
+    if inv.empty:
+        return []
+    pos = []
+    for _, r in inv.iterrows():
+        if float(r["qtd"]) > 0 or float(r["atual"]) > 0:
+            pos.append({"ativo": r["ativo"], "classe": r["classe"],
+                        "qtd": float(r["qtd"]), "atual": float(r["atual"])})
+    return pos
+
+
+@st.cache_data(ttl=300)
 def ler_tudo():
     desp = ler_aba(ABA_DESPESAS, {"Data": "data", "Descrição": "descricao",
                                   "Categoria": "categoria", "Valor (R$)": "valor",
@@ -345,6 +385,8 @@ def ler_tudo():
         transf = transf.sort_values("data", ascending=False).reset_index(drop=True)
         transf["_linha"] = transf.index + 2
 
+    vendas = ler_vendas()
+
     contas = ler_aba(ABA_CONTAS, {"Banco/Conta": "conta", "Tipo": "tipo",
                                   "Saldo Inicial (R$)": "saldo_inicial"})
     if not contas.empty:
@@ -361,12 +403,15 @@ def ler_tudo():
                  else pd.Series(dtype=float))
         t_rec = (transf.groupby("para_conta")["valor"].sum() if not transf.empty
                  else pd.Series(dtype=float))
+        v_rec = (vendas.groupby("conta_dest")["valor"].sum() if not vendas.empty
+                 else pd.Series(dtype=float))
 
         def _saldo(row):
             c = row["conta"]
             return (float(row["saldo_inicial"])
                     + float(entradas.get(c, 0.0)) - float(saidas.get(c, 0.0))
-                    - float(t_env.get(c, 0.0)) + float(t_rec.get(c, 0.0)))
+                    - float(t_env.get(c, 0.0)) + float(t_rec.get(c, 0.0))
+                    + float(v_rec.get(c, 0.0)))
 
         contas["saldo"] = contas.apply(_saldo, axis=1)
 
@@ -426,8 +471,7 @@ def ler_tudo():
                       and not pd.isna(r["data_apl"])):
                     v = valor_cdb_hoje(r["investido"], r["pct_cdi"],
                                        r["data_apl"])
-                    if v:
-                        inv.at[i, "atual"] = round(v, 2)
+                    inv.at[i, "atual"] = round(v, 2) if v else r["investido"]
             except Exception:
                 pass
         if not contas.empty and "conta_orig" in inv.columns:
@@ -435,20 +479,26 @@ def ler_tudo():
             contas["saldo"] = contas.apply(
                 lambda r: r["saldo"] - float(inv_saidas.get(r["conta"], 0.0)),
                 axis=1)
+        vendas_qtd = (vendas.groupby("ativo")["qtd"].sum() if not vendas.empty
+                      else pd.Series(dtype=float))
         grupos = []
         for (ativo, classe), g in inv.groupby(["ativo", "classe"],
                                               sort=False):
-            qtd_t = float(g["qtd"].sum())
-            inv_t = round(float(g["investido"].sum()), 2)
-            at_t = round(float(g["atual"].sum()), 2)
-            pm_t = (round(float((g["qtd"] * g["pm"]).sum() / qtd_t), 2)
-                    if qtd_t > 0 else round(float(g["pm"].mean()), 2))
-            if classe in CLASSES_RENDA_FIXA and qtd_t > 0:
-                pa_t = round(at_t / qtd_t, 2)
-            elif qtd_t > 0:
-                pa_t = round(float((g["qtd"] * g["pa"]).sum() / qtd_t), 2)
+            qtd_bruta = float(g["qtd"].sum())
+            qtd_vendida = float(vendas_qtd.get(ativo, 0.0))
+            qtd_t = max(qtd_bruta - qtd_vendida, 0.0)
+            if qtd_t <= 0:
+                continue
+            frac = qtd_t / qtd_bruta
+            inv_t = round(float(g["investido"].sum()) * frac, 2)
+            at_t = round(float(g["atual"].sum()) * frac, 2)
+            pm_t = (round(float((g["qtd"] * g["pm"]).sum() / qtd_bruta), 2)
+                    if qtd_bruta > 0 else round(float(g["pm"].mean()), 2))
+            if classe in CLASSES_RENDA_FIXA:
+                pa_t = round(at_t / qtd_t, 2) if qtd_t > 0 else 0.0
             else:
-                pa_t = round(float(g["pa"].mean()), 2)
+                pa_t = (round(float((g["qtd"] * g["pa"]).sum() / qtd_bruta), 2)
+                        if qtd_bruta > 0 else round(float(g["pa"].mean()), 2))
             com_cdi = g.loc[g["pct_cdi"] > 0, "pct_cdi"]
             pct = float(com_cdi.iloc[0]) if not com_cdi.empty else 0.0
             orig = ", ".join(sorted({str(x) for x in g["conta_orig"]
