@@ -183,12 +183,14 @@ def calcular_faturas(cartoes, compras):
         return resultado
     for _, card in cartoes.iterrows():
         nome = card["cartao"]
-        try:
-            fech = int(card["fechamento"])
-            venc = int(card["vencimento"])
-        except (ValueError, TypeError):
+        fech_v = converter_valor(card["fechamento"])
+        venc_v = converter_valor(card["vencimento"])
+        if fech_v is None or venc_v is None:
             continue
-        limite = float(card["limite"]) if card["limite"] else 0.0
+        fech, venc = int(fech_v), int(venc_v)
+        if not (1 <= fech <= 31) or not (1 <= venc <= 31):
+            continue
+        limite = converter_valor(card["limite"]) or 0.0
         do_cartao = (compras[compras["cartao"] == nome]
                      if not compras.empty else pd.DataFrame())
         fech_futuros = []
@@ -296,6 +298,11 @@ def ler_tudo():
                                     "Conta de Pagamento": "conta_pag"})
     if not cartoes.empty:
         cartoes = cartoes[cartoes["cartao"] != ""]
+        cartoes["fechamento"] = (cartoes["fechamento"]
+                                 .map(converter_valor).fillna(0))
+        cartoes["vencimento"] = (cartoes["vencimento"]
+                                 .map(converter_valor).fillna(0))
+        cartoes["limite"] = cartoes["limite"].map(converter_valor).fillna(0.0)
         cartoes = cartoes.reset_index(drop=True)
         cartoes["_linha"] = cartoes.index + 2
 
@@ -346,13 +353,4 @@ def excluir_linha(aba, numero_linha, ok_msg):
         st.session_state["msg_ok"] = ok_msg
         st.rerun()
     except Exception as e:
-        st.error(f"Não consegui excluir o lançamento: {e}")
-
-
-def barra_h(df, y, x, titulo):
-    fig = px.bar(df, x=x, y=y, orientation="h", text=df[x].map(fmt_rs),
-                 title=titulo)
-    fig.update_layout(xaxis_title=None, yaxis_title=None,
-                      margin=dict(l=10, r=10, t=40, b=10))
-    fig.update_xaxes(visible=False)
-    return fig
+        st.error(f"Não consegui excluir o lançamento: {
