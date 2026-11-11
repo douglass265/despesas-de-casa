@@ -418,9 +418,12 @@ def ler_tudo():
                         inv.at[i, "atual"] = round(v, 2)
             except Exception:
                 pass
+        if not contas.empty and "conta_orig" in inv.columns:
+            inv_saidas = inv.groupby("conta_orig")["investido"].sum()
+            contas["saldo"] = contas.apply(
+                lambda r: r["saldo"] - float(inv_saidas.get(r["conta"], 0.0)),
+                axis=1)
     return desp, rec, contas, inv, transf, cartoes, compras
-
-
 def salvar(aba, valores, ok_msg):
     try:
         abrir_planilha().worksheet(aba).append_row(
