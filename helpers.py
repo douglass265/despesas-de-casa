@@ -409,7 +409,8 @@ def ler_tudo():
         dol = cotacao_dolar()
         for i, r in inv.iterrows():
             try:
-                if r["classe"] in CLASSES_MOEDA_USD and dol:
+                                if r["classe"] in CLASSES_MOEDA_USD and dol:
+                    inv.at[i, "investido"] = round(r["qtd"] * r["pm"] * dol, 2)
                     inv.at[i, "atual"] = round(r["qtd"] * r["pa"] * dol, 2)
                 elif (r["classe"] in CLASSES_RENDA_FIXA and r["pct_cdi"] > 0
                       and not pd.isna(r["data_apl"])):
