@@ -1,7 +1,7 @@
 import streamlit as st
 from helpers import (fmt_rs, MESES_PT, ABA_DESPESAS, ABA_RECEITAS,
                      ABA_CONTAS, ABA_INVEST, ABA_TRANSF, ABA_COMPRAS,
-                     excluir_linha, ler_tudo)
+                     ABA_DIVID, excluir_linha, ler_tudo, ler_dividendos)
 
 LIMITE = 100
 
@@ -157,6 +157,43 @@ def _compras(compras):
                "nas faturas dos meses seguintes — veja em 💳 Cartões.")
 
 
+def _dividendos(div):
+    if div.empty:
+        st.info("Nenhum dividendo lançado ainda — registre em ➕ Lançamentos "
+                "→ 💎 Dividendos.")
+        return
+    mes_sel = _seletor_mes(div, "mes_div")
+    busca = st.text_input("🔎 Buscar por ativo",
+                          key="busca_div").strip().upper()
+    df_f = div if mes_sel is None else div[div["mes"] == mes_sel]
+    if busca:
+        df_f = df_f[df_f["ativo"].str.upper().str.contains(busca, na=False)]
+    st.caption(f"{len(df_f)} dividendo(s) — total: "
+               f"**{fmt_rs(df_f['valor'].sum())}**")
+    if df_f.empty:
+        st.info("Nada encontrado com esses filtros.")
+        return
+    st.divider()
+    df_f = _corte(df_f)
+    cols = st.columns([1.1, 2.6, 2.6, 1.4, 0.5])
+    for c, rot in zip(cols, ["Data", "Ativo", "Conta de destino", "Valor", ""]):
+        c.markdown(f"**{rot}**")
+    for _, r in df_f.iterrows():
+        cs = st.columns([1.1, 2.6, 2.6, 1.4, 0.5])
+        cs[0].write(r["data"].strftime("%d/%m/%Y"))
+        cs[1].write(r["ativo"])
+        cs[2].write(r["conta"] if r.get("conta") else "—")
+        cs[3].write(fmt_rs(r["valor"]))
+        if cs[4].button("🗑️", key=f"div_{int(r['_linha'])}",
+                        help="Excluir este dividendo"):
+            excluir_linha(ABA_DIVID, int(r["_linha"]),
+                          f"🗑️ Dividendo excluído: {r['ativo']}")
+    st.caption("Os dividendos alimentam a rentabilidade com proventos na "
+               "carteira do 📊 Painel. Para o dinheiro entrar no saldo de "
+               "uma conta, lance também uma 💰 Receita com a categoria "
+               "\"Dividendos\".")
+
+
 def _contas(contas):
     if contas.empty:
         st.info("Nenhuma conta cadastrada.")
@@ -204,10 +241,11 @@ def _investimentos(inv):
 
 def render(desp, rec, contas, inv):
     _, _, _, _, transf, cartoes, compras = ler_tudo()
+    div = ler_dividendos()
     st.subheader("📜 Histórico")
     tipo = st.radio("", ["💸 Despesas", "💰 Receitas", "🔁 Transferências",
-                         "💳 Compras no cartão", "🏦 Contas",
-                         "📈 Investimentos"], horizontal=True)
+                         "💳 Compras no cartão", "💎 Dividendos",
+                         "🏦 Contas", "📈 Investimentos"], horizontal=True)
     if tipo == "💸 Despesas":
         _movimentos(desp, "despesas", ABA_DESPESAS, True, "d")
     elif tipo == "💰 Receitas":
@@ -216,6 +254,8 @@ def render(desp, rec, contas, inv):
         _transferencias(transf)
     elif tipo == "💳 Compras no cartão":
         _compras(compras)
+    elif tipo == "💎 Dividendos":
+        _dividendos(div)
     elif tipo == "🏦 Contas":
         _contas(contas)
     else:
