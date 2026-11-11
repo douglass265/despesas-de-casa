@@ -35,9 +35,9 @@ MESES_PT = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho",
 
 SECRETS_EXEMPLO = ('[connections.gsheets.service_account]\n'
                    'type = "service_account"\n'
-                   'project_id = "galaxy-watch-assistente-334520"\n'
+                   'project_id = "seu-projeto"\n'
                    'private_key = "-----BEGIN PRIVATE KEY-----\\nSUA_CHAVE\\n"\n'
-                   'client_email = "despesas-de-casa@galaxy-watch-assistente-334520.iam.gserviceaccount.com"')
+                   'client_email = "conta@seu-projeto.iam.gserviceaccount.com"')
 
 
 def fmt_rs(v):
@@ -74,11 +74,6 @@ def cotacao_dolar():
         return float(r.json()["USDBRL"]["bid"])
     except Exception:
         return None
-
-
-def converter_usd_para_brl(valor_usd):
-    c = cotacao_dolar()
-    return round(valor_usd * c, 2) if c else None
 
 
 def valor_cdb_hoje(valor_aplicado, pct_cdi, data_apl):
@@ -178,6 +173,7 @@ def _limpar_movimentos(df, colunas_finais):
 
 
 def _proximo_fechamento(fech, a_partir_de):
+    """Primeiro dia 'fech' do mês estritamente após a data informada."""
     y, m = a_partir_de.year, a_partir_de.month
     for i in range(1, 15):
         mm = m + i
@@ -221,6 +217,7 @@ def _vencimento_da_fatura(venc, data_fech):
 
 
 def calcular_faturas(cartoes, compras):
+    """Calcula as próximas faturas de cada cartão (inclui parcelas futuras)."""
     hoje = date.today()
     resultado = []
     if cartoes.empty:
@@ -291,162 +288,3 @@ def rentabilidade_total_row(r, div_ativo):
     var = (float(r["atual"]) - inv) / inv * 100.0
     div = float(div_ativo) if div_ativo else 0.0
     return var + (div / inv) * 100.0
-
-
-@st.cache_data(ttl=300)
-def ler_dividendos():
-    d = ler_aba(ABA_DIVID, {"Data": "data", "Ativo": "ativo",
-                            "Valor (R$)": "valor",
-                            "Conta de Destino": "conta"})
-    if d.empty:
-        return d
-    d["data"] = converter_datas(d["data"])
-    d["valor"] = d["valor"].map(converter_valor)
-    d = d.dropna(subset=["data", "valor"])
-    d["valor"] = d["valor"].abs()
-    d["mes"] = d["data"].dt.to_period("M")
-    d = d.sort_values("data", ascending=False).reset_index(drop=True)
-    d["_linha"] = d.index + 2
-    return d[["data", "ativo", "valor", "conta", "mes", "_linha"]]
-
-
-@st.cache_data(ttl=300)
-def ler_tudo():
-    desp = ler_aba(ABA_DESPESAS, {"Data": "data", "Descrição": "descricao",
-                                  "Categoria": "categoria", "Valor (R$)": "valor",
-                                  "Forma de Pagamento": "forma", "Conta": "conta"})
-    desp = _limpar_movimentos(desp, ["data", "descricao", "categoria",
-                                     "valor", "forma", "conta"])
-
-    rec = ler_aba(ABA_RECEITAS, {"Data": "data", "Descrição": "descricao",
-                                 "Categoria": "categoria", "Valor (R$)": "valor",
-                                 "Conta (recebido em)": "conta"})
-    rec = _limpar_movimentos(rec, ["data", "descricao", "categoria",
-                                   "valor", "conta"])
-
-    transf = ler_aba(ABA_TRANSF, {"Data": "data", "Descrição": "descricao",
-                                  "Da Conta": "da_conta",
-                                  "Para a Conta": "para_conta",
-                                  "Valor (R$)": "valor"})
-    if not transf.empty:
-        transf["data"] = converter_datas(transf["data"])
-        transf["valor"] = transf["valor"].map(converter_valor)
-        transf = transf.dropna(subset=["data", "valor"])
-        transf["valor"] = transf["valor"].abs()
-        transf = transf.sort_values("data", ascending=False).reset_index(drop=True)
-        transf["_linha"] = transf.index + 2
-
-    contas = ler_aba(ABA_CONTAS, {"Banco/Conta": "conta", "Tipo": "tipo",
-                                  "Saldo Inicial (R$)": "saldo_inicial"})
-    if not contas.empty:
-        contas = contas[contas["conta"] != ""]
-        contas["saldo_inicial"] = (contas["saldo_inicial"]
-                                   .map(converter_valor).fillna(0.0))
-        contas = contas.reset_index(drop=True)
-        contas["_linha"] = contas.index + 2
-        saidas = (desp.groupby("conta")["valor"].sum() if not desp.empty
-                  else pd.Series(dtype=float))
-        entradas = (rec.groupby("conta")["valor"].sum() if not rec.empty
-                    else pd.Series(dtype=float))
-        t_env = (transf.groupby("da_conta")["valor"].sum() if not transf.empty
-                 else pd.Series(dtype=float))
-        t_rec = (transf.groupby("para_conta")["valor"].sum() if not transf.empty
-                 else pd.Series(dtype=float))
-
-        def _saldo(row):
-            c = row["conta"]
-            return (float(row["saldo_inicial"])
-                    + float(entradas.get(c, 0.0)) - float(saidas.get(c, 0.0))
-                    - float(t_env.get(c, 0.0)) + float(t_rec.get(c, 0.0)))
-
-        contas["saldo"] = contas.apply(_saldo, axis=1)
-
-        cartoes = ler_aba(ABA_CARTOES, {"Cartão (apelido)": "cartao",
-                                    "Bandeira/Emissor": "bandeira",
-                                    "Dia do Fechamento": "fechamento",
-                                    "Dia do Vencimento": "vencimento",
-                                    "Limite (R$)": "limite",
-                                    "Conta de Pagamento": "conta_pag"})
-    if not cartoes.empty:
-        cartoes = cartoes[cartoes["cartao"] != ""]
-        cartoes["fechamento"] = (cartoes["fechamento"]
-                                 .map(converter_valor).fillna(0))
-        cartoes["vencimento"] = (cartoes["vencimento"]
-                                 .map(converter_valor).fillna(0))
-        cartoes["limite"] = cartoes["limite"].map(converter_valor).fillna(0.0)
-        cartoes = cartoes.reset_index(drop=True)
-        cartoes["_linha"] = cartoes.index + 2
-
-    compras = ler_aba(ABA_COMPRAS, {"Data da Compra": "data",
-                                    "Descrição": "descricao", "Cartão": "cartao",
-                                    "Categoria": "categoria",
-                                    "Valor Total (R$)": "valor",
-                                    "Parcelas": "parcelas",
-                                    "Compra Parcelada?": "parcelada"})
-    if not compras.empty:
-        compras["data"] = converter_datas(compras["data"])
-        compras["valor"] = compras["valor"].map(converter_valor)
-        compras["parcelas"] = compras["parcelas"].map(converter_valor).fillna(1)
-        compras = compras.dropna(subset=["data", "valor"])
-        compras["valor"] = compras["valor"].abs()
-        compras = compras.sort_values("data", ascending=False).reset_index(drop=True)
-        compras["_linha"] = compras.index + 2
-
-        inv = ler_aba(ABA_INVEST, {"Ativo": "ativo", "Classe": "classe",
-                               "Quantidade": "qtd", "Preço Médio (R$)": "pm",
-                               "Preço Atual (R$)": "pa",
-                               "Total Investido (R$)": "investido",
-                               "Valor Atual (R$)": "atual",
-                               "% do CDI": "pct_cdi",
-                               "Data da Aplicação": "data_apl"})
-    if not inv.empty:
-        inv = inv[inv["ativo"] != ""]
-        for c in ["qtd", "pm", "pa", "investido", "atual", "pct_cdi"]:
-            inv[c] = inv[c].map(converter_valor).fillna(0.0)
-        inv["data_apl"] = converter_datas(inv["data_apl"])
-        inv = inv.reset_index(drop=True)
-        inv["_linha"] = inv.index + 2
-        dol = cotacao_dolar()
-        for i, r in inv.iterrows():
-            try:
-                if r["classe"] in CLASSES_MOEDA_USD and dol:
-                    inv.at[i, "investido"] = round(r["qtd"] * r["pm"] * dol, 2)
-                    inv.at[i, "atual"] = round(r["qtd"] * r["pa"] * dol, 2)
-                elif (r["classe"] in CLASSES_RENDA_FIXA and r["pct_cdi"] > 0
-                      and not pd.isna(r["data_apl"])):
-                    v = valor_cdb_hoje(r["investido"], r["pct_cdi"],
-                                       r["data_apl"])
-                    if v:
-                        inv.at[i, "atual"] = round(v, 2)
-            except Exception:
-                pass
-    return desp, rec, contas, inv, transf, cartoes, compras
-
-def salvar(aba, valores, ok_msg):
-    try:
-        abrir_planilha().worksheet(aba).append_row(
-            valores, value_input_option="USER_ENTERED")
-        st.cache_data.clear()
-        st.session_state["msg_ok"] = ok_msg
-        st.rerun()
-    except Exception as e:
-        st.error(f"Não consegui salvar na planilha: {e}")
-
-
-def excluir_linha(aba, numero_linha, ok_msg):
-    try:
-        abrir_planilha().worksheet(aba).delete_rows(numero_linha)
-        st.cache_data.clear()
-        st.session_state["msg_ok"] = ok_msg
-        st.rerun()
-    except Exception as e:
-        st.error(f"Não consegui excluir o lançamento: {e}")
-
-
-def barra_h(df, y, x, titulo):
-    fig = px.bar(df, x=x, y=y, orientation="h", text=df[x].map(fmt_rs),
-                 title=titulo)
-    fig.update_layout(xaxis_title=None, yaxis_title=None,
-                      margin=dict(l=10, r=10, t=40, b=10))
-    fig.update_xaxes(visible=False)
-    return fig
