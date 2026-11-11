@@ -2,18 +2,20 @@ import gspread
 import pandas as pd
 import plotly.express as px
 import streamlit as st
+from datetime import date
 from google.oauth2.service_account import Credentials
 
 SPREADSHEET_ID = "1sLKJiAJd-rGGCN1Tm5gi5SV6HHM0-v-Jhg6D1NcYaY0"
 ABA_DESPESAS, ABA_RECEITAS = "Despesas", "Receitas"
 ABA_CONTAS, ABA_INVEST = "Contas", "Investimentos"
+ABA_CARTOES, ABA_COMPRAS, ABA_TRANSF = "Cartões", "Compras Cartão", "Transferências"
 
 CATEGORIAS_DESPESA = [
     "Alimentação (fora de casa)", "Mercado/Supermercado", "Aluguel/Condomínio",
     "Energia elétrica", "Água", "Internet", "Telefone/Celular",
     "Transporte/Combustível", "Saúde/Plano de saúde", "Farmácia",
     "Educação", "Lazer/Entretenimento", "Vestuário", "Streaming/Assinaturas",
-    "Pets", "Outros",
+    "Pets", "Fatura do cartão", "Outros",
 ]
 CATEGORIAS_RECEITA = ["Salário", "Freelance/Extra", "Aluguel recebido",
                       "Rendimentos", "Vendas", "Presente", "Outros"]
@@ -21,6 +23,8 @@ FORMAS_PAGAMENTO = ["Dinheiro", "Pix", "Cartão de Crédito", "Cartão de Débit
                     "Débito Automático", "Boleto", "Vale Alimentação/Refeição"]
 CLASSES = ["Ações", "FIIs", "Renda Fixa", "Tesouro Direto", "CDB/LCI/LCA",
            "ETFs", "BDRs", "Criptomoedas", "Fundos", "Outros"]
+BANDEIRAS = ["Visa", "Mastercard", "Elo", "American Express", "Hipercard",
+             "Outra"]
 MESES_PT = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho",
             "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"]
 
@@ -127,6 +131,112 @@ def _limpar_movimentos(df, colunas_finais):
     return df[colunas_finais + ["mes", "_linha"]]
 
 
+def _proximo_fechamento(fech, a_partir_de):
+    """Primeiro dia 'fech' do mês estritamente após a data informada."""
+    y, m = a_partir_de.year, a_partir_de.month
+    for i in range(1, 15):
+        mm = m + i
+        yy = y + (mm - 1) // 12
+        mm = (mm - 1) % 12 + 1
+        try:
+            return date(yy, mm, fech)
+        except ValueError:
+            continue
+    return None
+
+
+def _fechamento_anterior(fech, data_fech):
+    if data_fech.month > 1:
+        y, m = data_fech.year, data_fech.month - 1
+    else:
+        y, m = data_fech.year - 1, 12
+    f = fech
+    while f >= 28:
+        try:
+            return date(y, m, f)
+        except ValueError:
+            f -= 1
+    return None
+
+
+def _vencimento_da_fatura(venc, data_fech):
+    if venc > data_fech.day:
+        return date(data_fech.year, data_fech.month, venc)
+    if data_fech.month < 12:
+        y, m = data_fech.year, data_fech.month + 1
+    else:
+        y, m = data_fech.year + 1, 1
+    f = venc
+    while f >= 28:
+        try:
+            return date(y, m, f)
+        except ValueError:
+            f -= 1
+    return data_fech
+
+
+def calcular_faturas(cartoes, compras):
+    """Calcula as próximas faturas de cada cartão (inclui parcelas futuras)."""
+    hoje = date.today()
+    resultado = []
+    if cartoes.empty:
+        return resultado
+    for _, card in cartoes.iterrows():
+        nome = card["cartao"]
+        try:
+            fech = int(card["fechamento"])
+            venc = int(card["vencimento"])
+        except (ValueError, TypeError):
+            continue
+        limite = float(card["limite"]) if card["limite"] else 0.0
+        do_cartao = (compras[compras["cartao"] == nome]
+                     if not compras.empty else pd.DataFrame())
+        fech_futuros = []
+        base = hoje
+        for _ in range(6):
+            prox = _proximo_fechamento(fech, base)
+            if prox is None:
+                break
+            fech_futuros.append(prox)
+            base = prox
+        faturas = []
+        for F in fech_futuros:
+            F_ant = _fechamento_anterior(fech, F)
+            total = 0.0
+            for _, c in do_cartao.iterrows():
+                dcomp = (c["data"].date() if hasattr(c["data"], "date")
+                         else c["data"])
+                npar = int(c["parcelas"]) if c["parcelas"] else 1
+                if npar <= 1:
+                    if F_ant and (F_ant < dcomp <= F):
+                        total += float(c["valor"])
+                else:
+                    primeira = _proximo_fechamento(fech, dcomp)
+                    if primeira is None:
+                        continue
+                    for k in range(1, npar + 1):
+                        mm = primeira.month + (k - 1)
+                        yy = primeira.year + (mm - 1) // 12
+                        mm = (mm - 1) % 12 + 1
+                        try:
+                            fk = date(yy, mm, fech)
+                        except ValueError:
+                            continue
+                        if fk == F:
+                            total += float(c["valor"]) / npar
+            faturas.append({"fechamento": F,
+                            "vencimento": _vencimento_da_fatura(venc, F),
+                            "total": round(total, 2)})
+        comprometido = round(sum(f["total"] for f in faturas), 2)
+        resultado.append({
+            "cartao": nome,
+            "bandeira": card["bandeira"] if "bandeira" in card else "",
+            "fechamento": fech, "vencimento": venc, "limite": limite,
+            "faturas": faturas, "comprometido": comprometido,
+            "disponivel": round(max(limite - comprometido, 0.0), 2)})
+    return resultado
+
+
 @st.cache_data(ttl=300)
 def ler_tudo():
     desp = ler_aba(ABA_DESPESAS, {"Data": "data", "Descrição": "descricao",
@@ -141,13 +251,68 @@ def ler_tudo():
     rec = _limpar_movimentos(rec, ["data", "descricao", "categoria",
                                    "valor", "conta"])
 
+    transf = ler_aba(ABA_TRANSF, {"Data": "data", "Descrição": "descricao",
+                                  "Da Conta": "da_conta",
+                                  "Para a Conta": "para_conta",
+                                  "Valor (R$)": "valor"})
+    if not transf.empty:
+        transf["data"] = converter_datas(transf["data"])
+        transf["valor"] = transf["valor"].map(converter_valor)
+        transf = transf.dropna(subset=["data", "valor"])
+        transf["valor"] = transf["valor"].abs()
+        transf = transf.sort_values("data", ascending=False).reset_index(drop=True)
+        transf["_linha"] = transf.index + 2
+
     contas = ler_aba(ABA_CONTAS, {"Banco/Conta": "conta", "Tipo": "tipo",
-                                  "Saldo Atual (R$)": "saldo"})
+                                  "Saldo Inicial (R$)": "saldo_inicial"})
     if not contas.empty:
         contas = contas[contas["conta"] != ""]
-        contas["saldo"] = contas["saldo"].map(converter_valor).fillna(0.0)
+        contas["saldo_inicial"] = (contas["saldo_inicial"]
+                                   .map(converter_valor).fillna(0.0))
         contas = contas.reset_index(drop=True)
         contas["_linha"] = contas.index + 2
+        saidas = (desp.groupby("conta")["valor"].sum() if not desp.empty
+                  else pd.Series(dtype=float))
+        entradas = (rec.groupby("conta")["valor"].sum() if not rec.empty
+                    else pd.Series(dtype=float))
+        t_env = (transf.groupby("da_conta")["valor"].sum() if not transf.empty
+                 else pd.Series(dtype=float))
+        t_rec = (transf.groupby("para_conta")["valor"].sum() if not transf.empty
+                 else pd.Series(dtype=float))
+
+        def _saldo(row):
+            c = row["conta"]
+            return (float(row["saldo_inicial"])
+                    + float(entradas.get(c, 0.0)) - float(saidas.get(c, 0.0))
+                    - float(t_env.get(c, 0.0)) + float(t_rec.get(c, 0.0)))
+
+        contas["saldo"] = contas.apply(_saldo, axis=1)
+
+    cartoes = ler_aba(ABA_CARTOES, {"Cartão (apelido)": "cartao",
+                                    "Bandeira/Emissor": "bandeira",
+                                    "Dia do Fechamento": "fechamento",
+                                    "Dia do Vencimento": "vencimento",
+                                    "Limite (R$)": "limite",
+                                    "Conta de Pagamento": "conta_pag"})
+    if not cartoes.empty:
+        cartoes = cartoes[cartoes["cartao"] != ""]
+        cartoes = cartoes.reset_index(drop=True)
+        cartoes["_linha"] = cartoes.index + 2
+
+    compras = ler_aba(ABA_COMPRAS, {"Data da Compra": "data",
+                                    "Descrição": "descricao", "Cartão": "cartao",
+                                    "Categoria": "categoria",
+                                    "Valor Total (R$)": "valor",
+                                    "Parcelas": "parcelas",
+                                    "Compra Parcelada?": "parcelada"})
+    if not compras.empty:
+        compras["data"] = converter_datas(compras["data"])
+        compras["valor"] = compras["valor"].map(converter_valor)
+        compras["parcelas"] = compras["parcelas"].map(converter_valor).fillna(1)
+        compras = compras.dropna(subset=["data", "valor"])
+        compras["valor"] = compras["valor"].abs()
+        compras = compras.sort_values("data", ascending=False).reset_index(drop=True)
+        compras["_linha"] = compras.index + 2
 
     inv = ler_aba(ABA_INVEST, {"Ativo": "ativo", "Classe": "classe",
                                "Quantidade": "qtd", "Preço Médio (R$)": "pm",
@@ -160,7 +325,7 @@ def ler_tudo():
             inv[c] = inv[c].map(converter_valor).fillna(0.0)
         inv = inv.reset_index(drop=True)
         inv["_linha"] = inv.index + 2
-    return desp, rec, contas, inv
+    return desp, rec, contas, inv, transf, cartoes, compras
 
 
 def salvar(aba, valores, ok_msg):
