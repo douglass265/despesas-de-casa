@@ -13,7 +13,7 @@ if INFO is None:
     st.stop()
 
 try:
-    desp, rec, contas, inv = ler_tudo()
+    desp, rec, contas, inv, transf, cartoes, compras = ler_tudo()
 except Exception as e:
     st.error("Não consegui acessar a planilha do Google.")
     st.code(str(e))
@@ -27,7 +27,7 @@ if "msg_ok" in st.session_state:
 
 st.sidebar.title("🏠 Finanças da Casa")
 pagina = st.sidebar.radio("Navegar", ["📊 Painel", "➕ Lançamentos",
-                                      "📜 Histórico"])
+                                      "💳 Cartões", "📜 Histórico"])
 if st.sidebar.button("🔄 Atualizar dados", use_container_width=True):
     st.cache_data.clear()
     st.rerun()
@@ -38,6 +38,9 @@ if pagina == "📊 Painel":
 elif pagina == "➕ Lançamentos":
     from lancamentos import render
     render()
+elif pagina == "💳 Cartões":
+    from cartoes import render
+    render(cartoes, compras, contas)
 else:
     from historico import render
     render(desp, rec, contas, inv)
