@@ -3,7 +3,7 @@ import plotly.express as px
 import streamlit as st
 from datetime import date
 from helpers import (fmt_rs, fmt_pct, barra_h, MESES_PT, ler_tudo,
-                     calcular_faturas)
+                     ler_dividendos, calcular_faturas, rentabilidade_total_row)
 
 
 def render(desp, rec, contas, inv):
@@ -14,19 +14,27 @@ def render(desp, rec, contas, inv):
     total_contas = contas["saldo"].sum() if not contas.empty else 0.0
     total_inv = inv["investido"].sum() if not inv.empty else 0.0
     val_atual = inv["atual"].sum() if not inv.empty else 0.0
-    rentab = ((val_atual - total_inv) / total_inv * 100) if total_inv > 0 else 0.0
 
-    m1, m2, m3, m4 = st.columns(4)
-    m1.metric("💰 Total em contas", fmt_rs(total_contas))
-    m2.metric("📈 Total investido", fmt_rs(total_inv))
-    m3.metric("💼 Carteira hoje", fmt_rs(val_atual))
-    m4.metric("🎯 Rentabilidade", fmt_pct(rentab))
-    p1, p2 = st.columns(2)
-    p1.metric("🏠 Patrimônio total", fmt_rs(total_contas + val_atual))
-    p2.metric(f"⚖️ Saldo de {MESES_PT[hoje.month - 1]} (rec. − desp.)",
+    div = ler_dividendos()
+    div_total = float(div["valor"].sum()) if not div.empty else 0.0
+    div_mes = float(div[div["mes"] == hoje]["valor"].sum()) if not div.empty else 0.0
+    div_por_ativo = (div.groupby("ativo")["valor"].sum().to_dict()
+                     if not div.empty else {})
+    rentab = ((val_atual - total_inv + div_total) / total_inv * 100.0
+              if total_inv > 0 else 0.0)
+
+    m1, m2 = st.columns(2)
+    m1.metric("🏦 Saldo total das contas", fmt_rs(total_contas))
+    m2.metric("💼 Patrimônio investido", fmt_rs(val_atual))
+    p1, p2, p3 = st.columns(3)
+    p1.metric("💰 Total aplicado", fmt_rs(total_inv))
+    p2.metric("💎 Dividendos recebidos", fmt_rs(div_total))
+    p3.metric("🎯 Rentabilidade total", fmt_pct(rentab))
+    q1, q2 = st.columns(2)
+    q1.metric(f"⚖️ Saldo de {MESES_PT[hoje.month - 1]} (rec. − desp.)",
               fmt_rs(rec_mes - desp_mes))
+    q2.metric(f"💎 Dividendos de {MESES_PT[hoje.month - 1]}", fmt_rs(div_mes))
 
-    # ----- Faturas a pagar (cartões) -----
     _, _, _, _, _, cartoes_f, compras_f = ler_tudo()
     faturas = calcular_faturas(cartoes_f, compras_f)
     if faturas:
@@ -38,13 +46,11 @@ def render(desp, rec, contas, inv):
             for col, f in zip(cols, grupo):
                 prox = f["faturas"][0] if f["faturas"] else None
                 total_prox = prox["total"] if prox else 0.0
-                if prox and total_prox > 0:
-                    delta = f"vence {prox['vencimento'].strftime('%d/%m')}"
-                else:
-                    delta = "nada a pagar"
+                delta = (f"vence {prox['vencimento'].strftime('%d/%m')}"
+                         if prox and total_prox > 0 else "nada a pagar")
                 col.metric(f"💳 {f['cartao']}", fmt_rs(total_prox),
                            delta=delta, delta_color="off")
-                col.caption(f"Limite disponível: {fmt_rs(f['disponivel'])}")
+                col.caption(f"Disponível: {fmt_rs(f['disponivel'])}")
 
     st.divider()
     st.subheader("📈 Minha carteira")
@@ -62,12 +68,14 @@ def render(desp, rec, contas, inv):
             st.plotly_chart(fig, use_container_width=True)
         with c2:
             tb = inv.copy()
-            tb["variacao"] = ((tb["atual"] - tb["investido"]) / tb["investido"] * 100
-                              ).where(tb["investido"] > 0, 0.0)
+            tb["rent_total"] = tb.apply(
+                lambda r: rentabilidade_total_row(
+                    r, div_por_ativo.get(r["ativo"], 0.0)), axis=1)
+            tb["div_receb"] = tb["ativo"].map(lambda a: div_por_ativo.get(a, 0.0))
             tb = tb.sort_values("atual", ascending=False)
             st.dataframe(
                 tb[["ativo", "classe", "qtd", "pm", "pa", "investido",
-                    "atual", "variacao"]],
+                    "atual", "rent_total", "div_receb"]],
                 use_container_width=True, hide_index=True,
                 column_config={
                     "ativo": "Ativo", "classe": "Classe",
@@ -76,7 +84,8 @@ def render(desp, rec, contas, inv):
                     "pa": st.column_config.NumberColumn("Preço atual", format="R$ %.2f"),
                     "investido": st.column_config.NumberColumn("Investido", format="R$ %.2f"),
                     "atual": st.column_config.NumberColumn("Valor atual", format="R$ %.2f"),
-                    "variacao": st.column_config.NumberColumn("Variação", format="%.2f%%")})
+                    "rent_total": st.column_config.NumberColumn("Rent. c/ dividendos", format="%.2f%%"),
+                    "div_receb": st.column_config.NumberColumn("Dividendos", format="R$ %.2f")})
 
     st.divider()
     st.subheader("🏦 Minhas contas")
