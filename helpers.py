@@ -392,7 +392,7 @@ def ler_tudo():
         compras = compras.sort_values("data", ascending=False).reset_index(drop=True)
         compras["_linha"] = compras.index + 2
 
-    inv = ler_aba(ABA_INVEST, {"Ativo": "ativo", "Classe": "classe",
+        inv = ler_aba(ABA_INVEST, {"Ativo": "ativo", "Classe": "classe",
                                "Quantidade": "qtd", "Preço Médio (R$)": "pm",
                                "Preço Atual (R$)": "pa",
                                "Total Investido (R$)": "investido",
@@ -409,7 +409,7 @@ def ler_tudo():
         dol = cotacao_dolar()
         for i, r in inv.iterrows():
             try:
-                                if r["classe"] in CLASSES_MOEDA_USD and dol:
+                if r["classe"] in CLASSES_MOEDA_USD and dol:
                     inv.at[i, "investido"] = round(r["qtd"] * r["pm"] * dol, 2)
                     inv.at[i, "atual"] = round(r["qtd"] * r["pa"] * dol, 2)
                 elif (r["classe"] in CLASSES_RENDA_FIXA and r["pct_cdi"] > 0
@@ -421,7 +421,6 @@ def ler_tudo():
             except Exception:
                 pass
     return desp, rec, contas, inv, transf, cartoes, compras
-
 
 def salvar(aba, valores, ok_msg):
     try:
