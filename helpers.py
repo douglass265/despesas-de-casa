@@ -1,8 +1,8 @@
 import gspread
 import pandas as pd
 import plotly.express as px
-import streamlit as st
 import requests
+import streamlit as st
 from datetime import date, timedelta
 from google.oauth2.service_account import Credentials
 
@@ -36,15 +36,8 @@ MESES_PT = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho",
 SECRETS_EXEMPLO = ('[connections.gsheets.service_account]\n'
                    'type = "service_account"\n'
                    'project_id = "galaxy-watch-assistente-334520"\n'
-                   'private_key_id = "COPIE_DO_JSON"\n'
                    'private_key = "-----BEGIN PRIVATE KEY-----\\nSUA_CHAVE\\n"\n'
-                   'client_email = "despesas-de-casa@galaxy-watch-assistente-334520.iam.gserviceaccount.com"\n'
-                   'client_id = "COPIE_DO_JSON"\n'
-                   'auth_uri = "https://accounts.google.com/o/oauth2/auth"\n'
-                   'token_uri = "https://oauth2.googleapis.com/token"\n'
-                   'auth_provider_x509_cert_url = "https://www.googleapis.com/oauth2/v1/certs"\n'
-                   'client_x509_cert_url = "COPIE_DO_JSON"\n'
-                   'universe_domain = "googleapis.com"')
+                   'client_email = "despesas-de-casa@galaxy-watch-assistente-334520.iam.gserviceaccount.com"')
 
 
 def fmt_rs(v):
@@ -76,11 +69,31 @@ def cdi_do_periodo(dias):
 @st.cache_data(ttl=3600)
 def cotacao_dolar():
     try:
-        r = requests.get(
-            "https://economia.awesomeapi.com.br/last/USD-BRL", timeout=15)
+        r = requests.get("https://economia.awesomeapi.com.br/last/USD-BRL",
+                         timeout=15)
         return float(r.json()["USDBRL"]["bid"])
     except Exception:
         return None
+
+
+def converter_usd_para_brl(valor_usd):
+    c = cotacao_dolar()
+    return round(valor_usd * c, 2) if c else None
+
+
+def valor_cdb_hoje(valor_aplicado, pct_cdi, data_apl):
+    """Valor estimado hoje de um CDB a % do CDI, pro rata die."""
+    if valor_aplicado is None or valor_aplicado <= 0:
+        return None
+    if pd.isna(data_apl):
+        return None
+    dias = max((date.today() - data_apl.date()).days, 0)
+    if dias < 1:
+        return None
+    cdi = cdi_do_periodo(dias)
+    if cdi is None:
+        return None
+    return valor_aplicado * (1.0 + (cdi / 100.0) * (pct_cdi / 100.0))
 
 
 def obter_info_credenciais():
@@ -165,7 +178,6 @@ def _limpar_movimentos(df, colunas_finais):
 
 
 def _proximo_fechamento(fech, a_partir_de):
-    """Primeiro dia 'fech' do mês estritamente após a data informada."""
     y, m = a_partir_de.year, a_partir_de.month
     for i in range(1, 15):
         mm = m + i
@@ -209,7 +221,6 @@ def _vencimento_da_fatura(venc, data_fech):
 
 
 def calcular_faturas(cartoes, compras):
-    """Calcula as próximas faturas de cada cartão (inclui parcelas futuras)."""
     hoje = date.today()
     resultado = []
     if cartoes.empty:
@@ -283,6 +294,23 @@ def rentabilidade_total_row(r, div_ativo):
 
 
 @st.cache_data(ttl=300)
+def ler_dividendos():
+    d = ler_aba(ABA_DIVID, {"Data": "data", "Ativo": "ativo",
+                            "Valor (R$)": "valor",
+                            "Conta de Destino": "conta"})
+    if d.empty:
+        return d
+    d["data"] = converter_datas(d["data"])
+    d["valor"] = d["valor"].map(converter_valor)
+    d = d.dropna(subset=["data", "valor"])
+    d["valor"] = d["valor"].abs()
+    d["mes"] = d["data"].dt.to_period("M")
+    d = d.sort_values("data", ascending=False).reset_index(drop=True)
+    d["_linha"] = d.index + 2
+    return d[["data", "ativo", "valor", "conta", "mes", "_linha"]]
+
+
+@st.cache_data(ttl=300)
 def ler_tudo():
     desp = ler_aba(ABA_DESPESAS, {"Data": "data", "Descrição": "descricao",
                                   "Categoria": "categoria", "Valor (R$)": "valor",
@@ -333,7 +361,7 @@ def ler_tudo():
 
         contas["saldo"] = contas.apply(_saldo, axis=1)
 
-    cartoes = ler_aba(ABA_CARTOES, {"Cartão (apelido)": "cartao",
+        cartoes = ler_aba(ABA_CARTOES, {"Cartão (apelido)": "cartao",
                                     "Bandeira/Emissor": "bandeira",
                                     "Dia do Fechamento": "fechamento",
                                     "Dia do Vencimento": "vencimento",
@@ -359,4 +387,66 @@ def ler_tudo():
         compras["data"] = converter_datas(compras["data"])
         compras["valor"] = compras["valor"].map(converter_valor)
         compras["parcelas"] = compras["parcelas"].map(converter_valor).fillna(1)
-        compras =
+        compras = compras.dropna(subset=["data", "valor"])
+        compras["valor"] = compras["valor"].abs()
+        compras = compras.sort_values("data", ascending=False).reset_index(drop=True)
+        compras["_linha"] = compras.index + 2
+
+    inv = ler_aba(ABA_INVEST, {"Ativo": "ativo", "Classe": "classe",
+                               "Quantidade": "qtd", "Preço Médio (R$)": "pm",
+                               "Preço Atual (R$)": "pa",
+                               "Total Investido (R$)": "investido",
+                               "Valor Atual (R$)": "atual",
+                               "% do CDI": "pct_cdi",
+                               "Data da Aplicação": "data_apl"})
+    if not inv.empty:
+        inv = inv[inv["ativo"] != ""]
+        for c in ["qtd", "pm", "pa", "investido", "atual", "pct_cdi"]:
+            inv[c] = inv[c].map(converter_valor).fillna(0.0)
+        inv["data_apl"] = converter_datas(inv["data_apl"])
+        inv = inv.reset_index(drop=True)
+        inv["_linha"] = inv.index + 2
+        dol = cotacao_dolar()
+        for i, r in inv.iterrows():
+            try:
+                if r["classe"] in CLASSES_MOEDA_USD and dol:
+                    inv.at[i, "atual"] = round(r["qtd"] * r["pa"] * dol, 2)
+                elif (r["classe"] in CLASSES_RENDA_FIXA and r["pct_cdi"] > 0
+                      and not pd.isna(r["data_apl"])):
+                    v = valor_cdb_hoje(r["investido"], r["pct_cdi"],
+                                       r["data_apl"])
+                    if v:
+                        inv.at[i, "atual"] = round(v, 2)
+            except Exception:
+                pass
+    return desp, rec, contas, inv, transf, cartoes, compras
+
+
+def salvar(aba, valores, ok_msg):
+    try:
+        abrir_planilha().worksheet(aba).append_row(
+            valores, value_input_option="USER_ENTERED")
+        st.cache_data.clear()
+        st.session_state["msg_ok"] = ok_msg
+        st.rerun()
+    except Exception as e:
+        st.error(f"Não consegui salvar na planilha: {e}")
+
+
+def excluir_linha(aba, numero_linha, ok_msg):
+    try:
+        abrir_planilha().worksheet(aba).delete_rows(numero_linha)
+        st.cache_data.clear()
+        st.session_state["msg_ok"] = ok_msg
+        st.rerun()
+    except Exception as e:
+        st.error(f"Não consegui excluir o lançamento: {e}")
+
+
+def barra_h(df, y, x, titulo):
+    fig = px.bar(df, x=x, y=y, orientation="h", text=df[x].map(fmt_rs),
+                 title=titulo)
+    fig.update_layout(xaxis_title=None, yaxis_title=None,
+                      margin=dict(l=10, r=10, t=40, b=10))
+    fig.update_xaxes(visible=False)
+    return fig
