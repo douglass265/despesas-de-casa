@@ -345,7 +345,6 @@ def salvar(aba, valores, ok_msg):
     except Exception as e:
         st.error(f"Não consegui salvar na planilha: {e}")
 
-
 def excluir_linha(aba, numero_linha, ok_msg):
     try:
         abrir_planilha().worksheet(aba).delete_rows(numero_linha)
@@ -353,4 +352,13 @@ def excluir_linha(aba, numero_linha, ok_msg):
         st.session_state["msg_ok"] = ok_msg
         st.rerun()
     except Exception as e:
-        st.error(f"Não consegui excluir o lançamento: {
+        st.error(f"Não consegui excluir o lançamento: {e}")
+
+
+def barra_h(df, y, x, titulo):
+    fig = px.bar(df, x=x, y=y, orientation="h", text=df[x].map(fmt_rs),
+                 title=titulo)
+    fig.update_layout(xaxis_title=None, yaxis_title=None,
+                      margin=dict(l=10, r=10, t=40, b=10))
+    fig.update_xaxes(visible=False)
+    return fig
