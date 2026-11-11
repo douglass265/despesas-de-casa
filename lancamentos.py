@@ -188,6 +188,10 @@ def _form_investimento():
         st.caption(f"💵 Cotação do dólar hoje: R$ {dol:.2f}")
     classe = st.selectbox("Classe do investimento", CLASSES)
     moeda = "US$" if classe in CLASSES_MOEDA_USD else "R$"
+    contas = listar_contas()
+    conta_sel = st.selectbox(
+        "💰 Debitar da conta (o saldo cai do valor aplicado)",
+        ["(não debitar)"] + contas)
     with st.form("f_inv", clear_on_submit=True):
         ativo = st.text_input(
             "Ativo (ex.: PETR4, HGLG11, IVVB11, AAPL, CDB Inter)")
@@ -212,11 +216,15 @@ def _form_investimento():
         if st.form_submit_button("💾 Salvar investimento", type="primary",
                                  use_container_width=True):
             if ativo.strip() and qtd > 0:
+                conv = dol if (classe in CLASSES_MOEDA_USD and dol) else 1.0
+                investido = round(qtd * pm * conv, 2)
+                atual = round(qtd * pa * conv, 2)
                 salvar(ABA_INVEST,
                        [ativo.strip(), classe, round(qtd, 4), round(pm, 2),
-                        round(pa, 2), round(qtd * pm, 2), round(qtd * pa, 2),
+                        round(pa, 2), investido, atual,
                         pct_cdi if pct_cdi else "",
-                        data_apl.strftime("%d/%m/%Y") if data_apl else ""],
+                        data_apl.strftime("%d/%m/%Y") if data_apl else "",
+                        "" if conta_sel == "(não debitar)" else conta_sel],
                        f"✅ Investimento salvo: {ativo.strip()}")
             else:
                 st.error("Informe o ativo e a quantidade.")
