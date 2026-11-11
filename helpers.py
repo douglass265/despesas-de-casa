@@ -2,13 +2,15 @@ import gspread
 import pandas as pd
 import plotly.express as px
 import streamlit as st
-from datetime import date
+import requests
+from datetime import date, timedelta
 from google.oauth2.service_account import Credentials
 
 SPREADSHEET_ID = "1sLKJiAJd-rGGCN1Tm5gi5SV6HHM0-v-Jhg6D1NcYaY0"
 ABA_DESPESAS, ABA_RECEITAS = "Despesas", "Receitas"
 ABA_CONTAS, ABA_INVEST = "Contas", "Investimentos"
 ABA_CARTOES, ABA_COMPRAS, ABA_TRANSF = "Cartões", "Compras Cartão", "Transferências"
+ABA_DIVID = "Dividendos"
 
 CATEGORIAS_DESPESA = [
     "Alimentação (fora de casa)", "Mercado/Supermercado", "Aluguel/Condomínio",
@@ -18,11 +20,14 @@ CATEGORIAS_DESPESA = [
     "Pets", "Fatura do cartão", "Outros",
 ]
 CATEGORIAS_RECEITA = ["Salário", "Freelance/Extra", "Aluguel recebido",
-                      "Rendimentos", "Vendas", "Presente", "Outros"]
+                      "Rendimentos", "Dividendos", "Vendas", "Presente", "Outros"]
 FORMAS_PAGAMENTO = ["Dinheiro", "Pix", "Cartão de Crédito", "Cartão de Débito",
                     "Débito Automático", "Boleto", "Vale Alimentação/Refeição"]
-CLASSES = ["Ações", "FIIs", "Renda Fixa", "Tesouro Direto", "CDB/LCI/LCA",
-           "ETFs", "BDRs", "Criptomoedas", "Fundos", "Outros"]
+CLASSES = ["Ações", "FIIs", "ETFs", "ETFs Internacionais", "Stocks",
+           "Renda Fixa", "Tesouro Direto", "CDB/LCI/LCA", "BDRs",
+           "Criptomoedas", "Fundos", "Outros"]
+CLASSES_MOEDA_USD = ["ETFs Internacionais", "Stocks"]
+CLASSES_RENDA_FIXA = ["Renda Fixa", "Tesouro Direto", "CDB/LCI/LCA"]
 BANDEIRAS = ["Visa", "Mastercard", "Elo", "American Express", "Hipercard",
              "Outra"]
 MESES_PT = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho",
@@ -48,6 +53,34 @@ def fmt_rs(v):
 
 def fmt_pct(v):
     return ("+" if v >= 0 else "") + f"{v:,.2f}%".replace(",", "@").replace(".", ",").replace("@", ".")
+
+
+@st.cache_data(ttl=21600)
+def cdi_do_periodo(dias):
+    """CDI acumulado no período (pro rata die), igual aos bancos."""
+    fim = date.today()
+    ini = fim - timedelta(days=dias)
+    u = (f"https://api.bcb.gov.br/dados/serie/bcdata.sgp.11/dados"
+         f"?formato=json&dataInicial={ini.strftime('%d/%m/%Y')}"
+         f"&dataFinal={fim.strftime('%d/%m/%Y')}")
+    try:
+        dados = requests.get(u, timeout=15).json()
+        acum = 1.0
+        for d in dados:
+            acum *= 1.0 + float(str(d["valor"]).replace(",", ".")) / 100.0
+        return (acum - 1.0) * 100.0
+    except Exception:
+        return None
+
+
+@st.cache_data(ttl=3600)
+def cotacao_dolar():
+    try:
+        r = requests.get(
+            "https://economia.awesomeapi.com.br/last/USD-BRL", timeout=15)
+        return float(r.json()["USDBRL"]["bid"])
+    except Exception:
+        return None
 
 
 def obter_info_credenciais():
@@ -239,6 +272,16 @@ def calcular_faturas(cartoes, compras):
     return resultado
 
 
+def rentabilidade_total_row(r, div_ativo):
+    """Variação de preço + dividendos recebidos (estilo Investidor10)."""
+    inv = float(r["investido"]) if r["investido"] else 0.0
+    if inv <= 0:
+        return 0.0
+    var = (float(r["atual"]) - inv) / inv * 100.0
+    div = float(div_ativo) if div_ativo else 0.0
+    return var + (div / inv) * 100.0
+
+
 @st.cache_data(ttl=300)
 def ler_tudo():
     desp = ler_aba(ABA_DESPESAS, {"Data": "data", "Descrição": "descricao",
@@ -316,49 +359,4 @@ def ler_tudo():
         compras["data"] = converter_datas(compras["data"])
         compras["valor"] = compras["valor"].map(converter_valor)
         compras["parcelas"] = compras["parcelas"].map(converter_valor).fillna(1)
-        compras = compras.dropna(subset=["data", "valor"])
-        compras["valor"] = compras["valor"].abs()
-        compras = compras.sort_values("data", ascending=False).reset_index(drop=True)
-        compras["_linha"] = compras.index + 2
-
-    inv = ler_aba(ABA_INVEST, {"Ativo": "ativo", "Classe": "classe",
-                               "Quantidade": "qtd", "Preço Médio (R$)": "pm",
-                               "Preço Atual (R$)": "pa",
-                               "Total Investido (R$)": "investido",
-                               "Valor Atual (R$)": "atual"})
-    if not inv.empty:
-        inv = inv[inv["ativo"] != ""]
-        for c in ["qtd", "pm", "pa", "investido", "atual"]:
-            inv[c] = inv[c].map(converter_valor).fillna(0.0)
-        inv = inv.reset_index(drop=True)
-        inv["_linha"] = inv.index + 2
-    return desp, rec, contas, inv, transf, cartoes, compras
-
-
-def salvar(aba, valores, ok_msg):
-    try:
-        abrir_planilha().worksheet(aba).append_row(
-            valores, value_input_option="USER_ENTERED")
-        st.cache_data.clear()
-        st.session_state["msg_ok"] = ok_msg
-        st.rerun()
-    except Exception as e:
-        st.error(f"Não consegui salvar na planilha: {e}")
-
-def excluir_linha(aba, numero_linha, ok_msg):
-    try:
-        abrir_planilha().worksheet(aba).delete_rows(numero_linha)
-        st.cache_data.clear()
-        st.session_state["msg_ok"] = ok_msg
-        st.rerun()
-    except Exception as e:
-        st.error(f"Não consegui excluir o lançamento: {e}")
-
-
-def barra_h(df, y, x, titulo):
-    fig = px.bar(df, x=x, y=y, orientation="h", text=df[x].map(fmt_rs),
-                 title=titulo)
-    fig.update_layout(xaxis_title=None, yaxis_title=None,
-                      margin=dict(l=10, r=10, t=40, b=10))
-    fig.update_xaxes(visible=False)
-    return fig
+        compras =
