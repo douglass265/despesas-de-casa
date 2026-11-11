@@ -4,8 +4,8 @@ from helpers import (CATEGORIAS_DESPESA, CATEGORIAS_RECEITA, FORMAS_PAGAMENTO,
                      CLASSES, CLASSES_MOEDA_USD, CLASSES_RENDA_FIXA,
                      BANDEIRAS, ABA_DESPESAS, ABA_RECEITAS, ABA_CONTAS,
                      ABA_INVEST, ABA_CARTOES, ABA_COMPRAS, ABA_TRANSF,
-                     ABA_DIVID, salvar, abrir_planilha, cotacao_dolar,
-                     cdi_do_periodo)
+                     ABA_DIVID, ABA_VENDAS, salvar, abrir_planilha,
+                     cotacao_dolar, cdi_do_periodo, fmt_rs, listar_posicoes)
 
 TIPOS_CONTA = ["Conta corrente", "Conta digital/Pix", "Poupança",
                "Cartão de crédito", "Dinheiro", "Outro"]
@@ -155,7 +155,6 @@ def _form_cadastro_cartao(opcoes_conta):
             else:
                 st.error("Escreva o apelido do cartão.")
 
-
 def _form_dividendo(ativos, contas):
     if not ativos:
         st.info("Nenhum ativo na carteira ainda — cadastre em 📈 Investimento.")
@@ -180,6 +179,45 @@ def _form_dividendo(ativos, contas):
                        f"✅ Dividendo salvo: {str(ativo).strip()} — R$ {valor:.2f}")
             else:
                 st.error("Informe o ativo.")
+
+
+def _form_venda(posicoes, opcoes_conta):
+    if not posicoes:
+        st.info("Nenhum ativo na carteira ainda — lance uma compra em "
+                "🛒 Comprar ativo primeiro.")
+        return
+    rotulos = [f"{p['ativo']} — {p['classe']} ({p['qtd']:g} disp.)"
+               for p in posicoes]
+    esc = st.selectbox("Qual ativo você está vendendo/resgatando?", rotulos)
+    p = posicoes[rotulos.index(esc)]
+    st.caption(f"Posição atual: **{p['qtd']:g} un.** · valor atual estimado: "
+               f"**{fmt_rs(p['atual'])}**")
+    if p["classe"] in ("Renda Fixa", "Tesouro Direto", "CDB/LCI/LCA"):
+        st.caption("💡 Caixinha/CDB: cada aporte conta como 1 unidade. "
+                   "Ex.: 2 aportes = 2 un. — para resgatar tudo, venda 2 un. "
+                   "com o valor total que caiu na conta.")
+    with st.form("f_venda", clear_on_submit=True):
+        c1, c2 = st.columns(2)
+        data = c1.date_input("Data da venda", format="DD/MM/YYYY", key="dv")
+        qtd = c2.number_input("Quantidade vendida", min_value=0.0001,
+                              value=float(p["qtd"]), format="%.4f", key="qv")
+        valor = st.number_input("Valor total recebido (R$)", min_value=0.01,
+                                value=float(p["atual"]), format="%.2f",
+                                key="vv")
+        conta_sel = st.selectbox("💰 Receber na conta", opcoes_conta, key="cv")
+        obs = st.text_input("Observação (opcional)", key="ov")
+        if st.form_submit_button("💾 Salvar venda", type="primary",
+                                 use_container_width=True):
+            disp = float(p["qtd"])
+            if qtd > disp + 1e-9:
+                st.error(f"Você só tem {disp:g} un. desse ativo.")
+            else:
+                salvar(ABA_VENDAS,
+                       [data.strftime("%d/%m/%Y"), p["ativo"], round(qtd, 4),
+                        round(valor, 2),
+                        "" if conta_sel == "(sem conta)" else conta_sel,
+                        obs.strip()],
+                       f"✅ Venda salva: {p['ativo']} — {fmt_rs(valor)}")
 
 
 def _form_investimento():
@@ -228,6 +266,8 @@ def _form_investimento():
                        f"✅ Investimento salvo: {ativo.strip()}")
             else:
                 st.error("Informe o ativo e a quantidade.")
+
+
 def _form_conta():
     st.caption("O saldo é calculado automaticamente: preencha o **Saldo "
                "Inicial** com o valor que a conta tinha antes dos lançamentos.")
@@ -276,4 +316,10 @@ def render():
     elif aba == "🏦 Conta":
         _form_conta()
     else:
-        _form_investimento()
+        sub = st.radio("O que você quer fazer?",
+                       ["🛒 Comprar ativo", "📤 Vender/Resgatar"],
+                       horizontal=True, key="sub_inv")
+        if sub == "🛒 Comprar ativo":
+            _form_investimento()
+        else:
+            _form_venda(listar_posicoes(), opcoes_conta)
