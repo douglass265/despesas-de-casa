@@ -212,7 +212,7 @@ def _fechamento_anterior(fech, data_fech):
             return date(y, m, f)
         except ValueError:
             f -= 1
-    return None
+    return date(y, m, f)
 
 
 def _vencimento_da_fatura(venc, data_fech):
@@ -228,7 +228,7 @@ def _vencimento_da_fatura(venc, data_fech):
             return date(y, m, f)
         except ValueError:
             f -= 1
-    return data_fech
+    return date(y, m, f)
 
 
 def calcular_faturas(cartoes, compras):
