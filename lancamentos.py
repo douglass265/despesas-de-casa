@@ -5,7 +5,8 @@ from helpers import (CATEGORIAS_DESPESA, CATEGORIAS_RECEITA, FORMAS_PAGAMENTO,
                      BANDEIRAS, ABA_DESPESAS, ABA_RECEITAS, ABA_CONTAS,
                      ABA_INVEST, ABA_CARTOES, ABA_COMPRAS, ABA_TRANSF,
                      ABA_DIVID, ABA_VENDAS, salvar, abrir_planilha,
-                     cotacao_dolar, cdi_do_periodo, fmt_rs, listar_posicoes)
+                     cotacao_dolar, cdi_do_periodo, fmt_rs, listar_posicoes,
+                     calcular_faturas, ler_tudo)
 
 TIPOS_CONTA = ["Conta corrente", "Conta digital/Pix", "Poupança",
                "Cartão de crédito", "Dinheiro", "Outro"]
@@ -271,6 +272,63 @@ def _form_investimento():
             else:
                 st.error("Informe o ativo e a quantidade.")
 
+def _form_pagar_fatura(opcoes_conta):
+    _, _, _, _, _, cartoes_df, compras_df = ler_tudo()
+    faturas = calcular_faturas(cartoes_df, compras_df)
+    if not faturas:
+        st.info("Nenhum cartão cadastrado — cadastre em 💳 Cadastrar cartão.")
+        return
+    rotulos, dados = [], []
+    for f in faturas:
+        if f["faturas"]:
+            f1 = f["faturas"][0]
+            rotulos.append(f"{f['cartao']} — vence "
+                           f"{f1['vencimento'].strftime('%d/%m')} — "
+                           f"{fmt_rs(f1['total'])}")
+            dados.append({"nome": f["cartao"], "f1": f1})
+    if not rotulos:
+        st.info("Nenhuma fatura calculada ainda — lance compras no cartão "
+                "para as faturas aparecerem.")
+        return
+    st.caption("Mostrando a **próxima fatura de vencer** de cada cartão, "
+               "calculada pelo app. Confira o valor na fatura do banco e "
+               "ajuste aqui se precisar.")
+    esc = st.selectbox("Qual fatura você quer pagar?", rotulos)
+    d = dados[rotulos.index(esc)]
+    nome, f1 = d["nome"], d["f1"]
+    contas = [c for c in opcoes_conta if c != "(sem conta)"]
+    conta_padrao = ""
+    if not cartoes_df.empty:
+        lr = cartoes_df[cartoes_df["conta"] == nome]
+        if not lr.empty:
+            cp = lr.iloc[0]["conta_pag"]
+            conta_padrao = str(cp) if cp and str(cp) not in ("nan", "None") else ""
+    idx = (contas.index(conta_padrao) + 1) if conta_padrao in contas else 0
+    with st.form("f_pagar", clear_on_submit=True):
+        c1, c2 = st.columns(2)
+        data = c1.date_input("Data do pagamento", format="DD/MM/YYYY",
+                             key="dpag")
+        valor = c2.number_input("Valor pago (R$)", min_value=0.01,
+                                value=max(float(f1["total"]), 0.01),
+                                format="%.2f", key="vpag")
+        forma = st.selectbox("Forma de pagamento",
+                             ["Pix", "Débito Automático", "Boleto",
+                              "Cartão de Débito", "Dinheiro"], key="fpag")
+        conta_sel = st.selectbox("💳 Pagar com a conta", opcoes_conta,
+                                 index=idx, key="cpag")
+        if st.form_submit_button("💾 Registrar pagamento da fatura",
+                                 type="primary",
+                                 use_container_width=True):
+            if conta_sel == "(sem conta)":
+                st.error("Escolha a conta que pagou a fatura.")
+            else:
+                salvar(ABA_DESPESAS,
+                       [data.strftime("%d/%m/%Y"),
+                        f"Fatura cartão {nome} — venc. "
+                        f"{f1['vencimento'].strftime('%d/%m')}",
+                        "Fatura do cartão", round(valor, 2), forma, conta_sel],
+                       f"✅ Pagamento registrado: fatura do {nome} — "
+                       f"{fmt_rs(valor)}")
 
 def _form_conta():
     st.caption("O saldo é calculado automaticamente: preencha o **Saldo "
@@ -308,11 +366,14 @@ def render():
     elif aba == "🔁 Transferência":
         _form_transferencia(contas)
     elif aba == "💳 Cartão":
-        sub = st.radio("O que você quer lançar?",
-                       ["🛍️ Compra no cartão", "💳 Cadastrar cartão"],
+                sub = st.radio("O que você quer lançar?",
+                       ["🛍️ Compra no cartão", "💳 Pagar fatura",
+                        "💳 Cadastrar cartão"],
                        horizontal=True, key="sub_cartao")
         if sub == "🛍️ Compra no cartão":
             _form_compra_cartao(cartoes)
+        elif sub == "💳 Pagar fatura":
+            _form_pagar_fatura(opcoes_conta)
         else:
             _form_cadastro_cartao(opcoes_conta)
     elif aba == "💎 Dividendos":
