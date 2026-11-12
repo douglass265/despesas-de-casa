@@ -272,6 +272,7 @@ def _form_investimento():
             else:
                 st.error("Informe o ativo e a quantidade.")
 
+
 def _form_pagar_fatura(opcoes_conta):
     _, _, _, _, _, cartoes_df, compras_df = ler_tudo()
     faturas = calcular_faturas(cartoes_df, compras_df)
@@ -299,7 +300,7 @@ def _form_pagar_fatura(opcoes_conta):
     contas = [c for c in opcoes_conta if c != "(sem conta)"]
     conta_padrao = ""
     if not cartoes_df.empty:
-        lr = cartoes_df[cartoes_df["conta"] == nome]
+        lr = cartoes_df[cartoes_df["cartao"] == nome]
         if not lr.empty:
             cp = lr.iloc[0]["conta_pag"]
             conta_padrao = str(cp) if cp and str(cp) not in ("nan", "None") else ""
@@ -329,6 +330,7 @@ def _form_pagar_fatura(opcoes_conta):
                         "Fatura do cartão", round(valor, 2), forma, conta_sel],
                        f"✅ Pagamento registrado: fatura do {nome} — "
                        f"{fmt_rs(valor)}")
+
 
 def _form_conta():
     st.caption("O saldo é calculado automaticamente: preencha o **Saldo "
@@ -366,7 +368,7 @@ def render():
     elif aba == "🔁 Transferência":
         _form_transferencia(contas)
     elif aba == "💳 Cartão":
-                sub = st.radio("O que você quer lançar?",
+        sub = st.radio("O que você quer lançar?",
                        ["🛍️ Compra no cartão", "💳 Pagar fatura",
                         "💳 Cadastrar cartão"],
                        horizontal=True, key="sub_cartao")
