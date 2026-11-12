@@ -255,14 +255,14 @@ def calcular_faturas(cartoes, compras):
         limite = converter_valor(card["limite"]) or 0.0
         do_cartao = (compras[compras["cartao"] == nome]
                      if not compras.empty else pd.DataFrame())
-        fech_futuros = []
+                fech_futuros = []
         base = hoje
         for _ in range(6):
             prox = _proximo_fechamento(fech, base)
             if prox is None:
                 break
             fech_futuros.append(prox)
-                        base = prox + timedelta(days=1)
+            base = prox + timedelta(days=1)
         faturas = []
         for F in fech_futuros:
             F_ant = _fechamento_anterior(fech, F)
