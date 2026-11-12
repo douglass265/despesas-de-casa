@@ -188,16 +188,21 @@ def _limpar_movimentos(df, colunas_finais):
 
 
 def _proximo_fechamento(fech, a_partir_de):
-    """Primeiro dia 'fech' do mês estritamente após a data informada."""
+    """Primeiro dia 'fech' NA data informada ou depois dela.
+    Assim a fatura em aberto (que ainda vai fechar) entra na lista."""
     y, m = a_partir_de.year, a_partir_de.month
-    for i in range(1, 15):
+    for i in range(0, 15):
         mm = m + i
         yy = y + (mm - 1) // 12
         mm = (mm - 1) % 12 + 1
-        try:
-            return date(yy, mm, fech)
-        except ValueError:
-            continue
+        for dia in range(fech, 27, -1):
+            try:
+                cand = date(yy, mm, dia)
+            except ValueError:
+                continue
+            if cand >= a_partir_de:
+                return cand
+            break
     return None
 
 
