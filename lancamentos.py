@@ -106,19 +106,23 @@ def _form_transferencia(contas_reais):
 def _form_compra_cartao(cartoes):
     if not cartoes:
         st.warning("Cadastre um cartão primeiro, em 💳 Cadastrar cartão.")
+        return
+    cartao = st.selectbox("Cartão", cartoes)
+    parcelada = st.selectbox("Compra parcelada?", ["Não", "Sim"])
+    n_parcelas = 1
+    if parcelada == "Sim":
+        n_parcelas = st.number_input("Número de parcelas", min_value=2,
+                                     max_value=24, value=2, step=1)
+        st.caption(f"💡 A compra será dividida em **{n_parcelas} faturas "
+                   f"mensais iguais** — a primeira no fechamento seguinte "
+                   f"à data da compra.")
     with st.form("f_compra", clear_on_submit=True):
         c1, c2 = st.columns(2)
         data = c1.date_input("Data da compra", format="DD/MM/YYYY")
-        cartao = c2.selectbox("Cartão", cartoes)
+        valor = c2.number_input("Valor total (R$)", min_value=0.01,
+                                format="%.2f")
         desc = st.text_input("Descrição da compra")
         cat = st.selectbox("Categoria", CATEGORIAS_DESPESA)
-        c3, c4 = st.columns(2)
-        valor = c3.number_input("Valor total (R$)", min_value=0.01, format="%.2f")
-        parcelada = c4.selectbox("Compra parcelada?", ["Não", "Sim"])
-        n_parcelas = 1
-        if parcelada == "Sim":
-            n_parcelas = st.number_input("Número de parcelas", min_value=2,
-                                         max_value=24, value=2, step=1)
         if st.form_submit_button("💾 Salvar compra", type="primary",
                                  use_container_width=True):
             if desc.strip() and cartao:
