@@ -49,6 +49,4 @@ def render(cartoes, compras, contas):
                         "total": st.column_config.NumberColumn(
                             "Valor a pagar", format="R$ %.2f")})
 
-            st.caption("Quando pagar a fatura, registre uma 💸 Despesa com a "
-                       "categoria **Fatura do cartão**, na conta de "
-                       "pagamento — o saldo da conta cai automaticamente.")
+            st.caption("Para registrar o pagamento, use ➕ Lançamentos → 💳 Cartão → 💳 Pagar fatura.")
