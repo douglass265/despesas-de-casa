@@ -262,7 +262,7 @@ def calcular_faturas(cartoes, compras):
             if prox is None:
                 break
             fech_futuros.append(prox)
-            base = prox
+            base = prox + timedelta(days=1)
         faturas = []
         for F in fech_futuros:
             F_ant = _fechamento_anterior(fech, F)
