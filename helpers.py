@@ -195,14 +195,15 @@ def _proximo_fechamento(fech, a_partir_de):
         mm = m + i
         yy = y + (mm - 1) // 12
         mm = (mm - 1) % 12 + 1
-        for dia in range(fech, 27, -1):
+        f = fech
+        while True:
             try:
-                cand = date(yy, mm, dia)
+                cand = date(yy, mm, f)
+                break
             except ValueError:
-                continue
-            if cand >= a_partir_de:
-                return cand
-            break
+                f -= 1
+        if cand >= a_partir_de:
+            return cand
     return None
 
 
