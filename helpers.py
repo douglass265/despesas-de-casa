@@ -81,7 +81,7 @@ def cdi_do_periodo(dias):
     return None
 
 
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=43200)
 def cotacao_dolar():
     try:
         r = requests.get("https://economia.awesomeapi.com.br/last/USD-BRL",
