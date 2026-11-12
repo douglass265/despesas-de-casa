@@ -296,12 +296,10 @@ def calcular_faturas(cartoes, compras):
                         if (f.year, f.month) == (ciclo_i.year, ciclo_i.month):
                             totais[j] = round(totais[j] + parc, 2)
                             break
-                fs = []
-        acum = 0.0
-        for k, f in enumerate(fech_futuros):
-            acum = round(acum + totais[k], 2)
-            fs.append({"vencimento": _vencimento_da_fatura(venc, f),
-                       "total": round(totais[k], 2),
+          fs = []
+          for k, f in enumerate(fech_futuros):
+              fs.append({"vencimento": _vencimento_da_fatura(venc, f),
+                         "total": round(totais[k], 2)})
                        "disponivel": round(limite - acum, 2)})
         saida.append({"cartao": str(c["cartao"]), "fechamento": fech,
                       "vencimento": venc, "limite": limite,
