@@ -48,7 +48,7 @@ def fmt_pct(v):
     return ("+" if v >= 0 else "") + f"{v:,.2f}%".replace(",", "@").replace(".", ",").replace("@", ".")
 
 
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=43200)
 def cdi_do_periodo(dias):
     """CDI acumulado no período (pro rata die), igual aos bancos.
     Tenta a API do Banco Central de duas formas antes de desistir."""
