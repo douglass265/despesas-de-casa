@@ -238,67 +238,81 @@ def _vencimento_da_fatura(venc, data_fech):
 
 
 def calcular_faturas(cartoes, compras):
-    """Calcula as próximas faturas de cada cartão (inclui parcelas futuras)."""
+    import calendar
     hoje = date.today()
-    resultado = []
-    if cartoes.empty:
-        return resultado
-    for _, card in cartoes.iterrows():
-        nome = card["cartao"]
-        fech_v = converter_valor(card["fechamento"])
-        venc_v = converter_valor(card["vencimento"])
-        if fech_v is None or venc_v is None:
+    saida = []
+    if cartoes is None or cartoes.empty:
+        return saida
+
+    def fech_em(ano, mes, dia):
+        return date(ano, mes, min(dia, calendar.monthrange(ano, mes)[1]))
+
+    def mais_meses(ano, mes, n):
+        t = mes - 1 + n
+        return ano + t // 12, t % 12 + 1
+
+    for _, c in cartoes.iterrows():
+        try:
+            fech = int(c["fechamento"])
+            venc = int(c["vencimento"])
+            limite = float(c["limite"])
+        except Exception:
             continue
-        fech, venc = int(fech_v), int(venc_v)
-        if not (1 <= fech <= 31) or not (1 <= venc <= 31):
+        if not (1 <= fech <= 31 and 1 <= venc <= 31):
             continue
-        limite = converter_valor(card["limite"]) or 0.0
-        do_cartao = (compras[compras["cartao"] == nome]
-                     if not compras.empty else pd.DataFrame())
-        fech_futuros = []
-        base = hoje
-        for _ in range(6):
-            prox = _proximo_fechamento(fech, base)
-            if prox is None:
-                break
-            fech_futuros.append(prox)
-            base = prox + timedelta(days=1)
-        faturas = []
-        for F in fech_futuros:
-            F_ant = _fechamento_anterior(fech, F)
-            total = 0.0
-            for _, c in do_cartao.iterrows():
-                dcomp = (c["data"].date() if hasattr(c["data"], "date")
-                         else c["data"])
-                npar = int(c["parcelas"]) if c["parcelas"] else 1
-                if npar <= 1:
-                    if F_ant and (F_ant < dcomp <= F):
-                        total += float(c["valor"])
-                else:
-                    primeira = _proximo_fechamento(fech, dcomp)
-                    if primeira is None:
-                        continue
-                    for k in range(1, npar + 1):
-                        mm = primeira.month + (k - 1)
-                        yy = primeira.year + (mm - 1) // 12
-                        mm = (mm - 1) % 12 + 1
-                        try:
-                            fk = date(yy, mm, fech)
-                        except ValueError:
-                            continue
-                        if fk == F:
-                            total += float(c["valor"]) / npar
-            faturas.append({"fechamento": F,
-                            "vencimento": _vencimento_da_fatura(venc, F),
-                            "total": round(total, 2)})
-        comprometido = round(sum(f["total"] for f in faturas), 2)
-        resultado.append({
-            "cartao": nome,
-            "bandeira": card["bandeira"] if "bandeira" in card else "",
-            "fechamento": fech, "vencimento": venc, "limite": limite,
-            "faturas": faturas, "comprometido": comprometido,
-            "disponivel": round(max(limite - comprometido, 0.0), 2)})
-    return resultado
+
+        def venc_de(f):
+            if venc > f.day:
+                return fech_em(f.year, f.month, venc)
+            y, m = mais_meses(f.year, f.month, 1)
+            return fech_em(y, m, venc)
+
+        ciclos = []
+        for i in range(-2, 9):
+            y, m = mais_meses(hoje.year, hoje.month, i)
+            f = fech_em(y, m, fech)
+            if venc_de(f) >= hoje:
+                ciclos.append(f)
+        ciclos = ciclos[:7]
+
+        totais = {(f.year, f.month): 0.0 for f in ciclos}
+        if compras is not None and not compras.empty:
+            for _, r in compras.iterrows():
+                if str(r.get("cartao", "")).strip() != str(c["cartao"]).strip():
+                    continue
+                data_c = r.get("data")
+                if data_c is None or pd.isna(data_c):
+                    continue
+                d0 = pd.Timestamp(data_c).date()
+                try:
+                    valor = abs(float(r["valor"]))
+                except Exception:
+                    continue
+                try:
+                    npar = int(float(r["parcelas"] or 1))
+                except Exception:
+                    npar = 1
+                npar = max(npar, 1)
+                parc = round(valor / npar, 2)
+                c0 = fech_em(d0.year, d0.month, fech)
+                if d0 > c0:
+                    y0, m0 = mais_meses(d0.year, d0.month, 1)
+                    c0 = fech_em(y0, m0, fech)
+                for i in range(npar):
+                    y, m = mais_meses(c0.year, c0.month, i)
+                    if (y, m) in totais:
+                        totais[(y, m)] = round(totais[(y, m)] + parc, 2)
+
+        fs = []
+        acum = 0.0
+        for f in ciclos:
+            tot = totais[(f.year, f.month)]
+            acum = round(acum + tot, 2)
+            fs.append({"vencimento": venc_de(f), "total": tot,
+                       "disponivel": round(limite - acum, 2)})
+        saida.append({"cartao": str(c["cartao"]), "fechamento": fech,
+                      "vencimento": venc, "limite": limite, "faturas": fs})
+    return saida
 
 
 def rentabilidade_total_row(r, div_ativo):
