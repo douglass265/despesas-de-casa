@@ -310,8 +310,11 @@ def calcular_faturas(cartoes, compras):
             acum = round(acum + tot, 2)
             fs.append({"vencimento": venc_de(f), "total": tot,
                        "disponivel": round(limite - acum, 2)})
-        saida.append({"cartao": str(c["cartao"]), "fechamento": fech,
-                      "vencimento": venc, "limite": limite, "faturas": fs})
+                saida.append({"cartao": str(c["cartao"]), "fechamento": fech,
+                      "vencimento": venc, "limite": limite,
+                      "bandeira": str(c.get("bandeira", "") or ""),
+                      "disponivel": fs[0]["disponivel"] if fs else limite,
+                      "faturas": fs})
     return saida
 
 
