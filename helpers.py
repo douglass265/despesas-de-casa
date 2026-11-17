@@ -15,9 +15,10 @@ ABA_DIVID, ABA_VENDAS = "Dividendos", "Vendas"
 CATEGORIAS_DESPESA = [
     "Alimentação (fora de casa)", "Mercado/Supermercado", "Aluguel/Condomínio",
     "Energia elétrica", "Água", "Internet", "Telefone/Celular",
-    "Transporte/Combustível", "Saúde/Plano de saúde", "Farmácia",
+    "Combustível", "Carro: peças e manutenção", "Transporte",
+    "Saúde/Plano de saúde", "Farmácia",
     "Educação", "Lazer/Entretenimento", "Vestuário", "Streaming/Assinaturas",
-    "Pets", "Fatura do cartão", "Outros",
+    "Casa", "Pets", "Fatura do cartão", "Outros",
 ]
 CATEGORIAS_RECEITA = ["Salário", "Freelance/Extra", "Aluguel recebido",
                       "Rendimentos", "Dividendos", "Vendas", "Presente", "Outros"]
