@@ -391,13 +391,11 @@ def ler_tudo():
                                   "Forma de Pagamento": "forma", "Conta": "conta"})
     desp = _limpar_movimentos(desp, ["data", "descricao", "categoria",
                                      "valor", "forma", "conta"])
-
     rec = ler_aba(ABA_RECEITAS, {"Data": "data", "Descrição": "descricao",
                                  "Categoria": "categoria", "Valor (R$)": "valor",
                                  "Conta (recebido em)": "conta"})
     rec = _limpar_movimentos(rec, ["data", "descricao", "categoria",
                                    "valor", "conta"])
-
     transf = ler_aba(ABA_TRANSF, {"Data": "data", "Descrição": "descricao",
                                   "Da Conta": "da_conta",
                                   "Para a Conta": "para_conta",
@@ -409,9 +407,7 @@ def ler_tudo():
         transf["valor"] = transf["valor"].abs()
         transf = transf.sort_values("data", ascending=False).reset_index(drop=True)
         transf["_linha"] = transf.index + 2
-
     vendas = ler_vendas()
-
     contas = ler_aba(ABA_CONTAS, {"Banco/Conta": "conta", "Tipo": "tipo",
                                   "Saldo Inicial (R$)": "saldo_inicial"})
     if not contas.empty:
@@ -430,16 +426,17 @@ def ler_tudo():
                  else pd.Series(dtype=float))
         v_rec = (vendas.groupby("conta_dest")["valor"].sum() if not vendas.empty
                  else pd.Series(dtype=float))
+        dv = ler_dividendos()
+        d_rec = (dv.groupby("conta")["valor"].sum() if not dv.empty
+                 else pd.Series(dtype=float))
 
         def _saldo(row):
             c = row["conta"]
             return (float(row["saldo_inicial"])
                     + float(entradas.get(c, 0.0)) - float(saidas.get(c, 0.0))
                     - float(t_env.get(c, 0.0)) + float(t_rec.get(c, 0.0))
-                    + float(v_rec.get(c, 0.0)))
-
+                    + float(v_rec.get(c, 0.0)) + float(d_rec.get(c, 0.0)))
         contas["saldo"] = contas.apply(_saldo, axis=1)
-
     cartoes = ler_aba(ABA_CARTOES, {"Cartão (apelido)": "cartao",
                                     "Bandeira/Emissor": "bandeira",
                                     "Dia do Fechamento": "fechamento",
@@ -455,7 +452,6 @@ def ler_tudo():
         cartoes["limite"] = cartoes["limite"].map(converter_valor).fillna(0.0)
         cartoes = cartoes.reset_index(drop=True)
         cartoes["_linha"] = cartoes.index + 2
-
     compras = ler_aba(ABA_COMPRAS, {"Data da Compra": "data",
                                     "Descrição": "descricao", "Cartão": "cartao",
                                     "Categoria": "categoria",
@@ -470,7 +466,6 @@ def ler_tudo():
         compras["valor"] = compras["valor"].abs()
         compras = compras.sort_values("data", ascending=False).reset_index(drop=True)
         compras["_linha"] = compras.index + 2
-
     inv = ler_aba(ABA_INVEST, {"Ativo": "ativo", "Classe": "classe",
                                "Quantidade": "qtd", "Preço Médio (R$)": "pm",
                                "Preço Atual (R$)": "pa",
@@ -507,8 +502,7 @@ def ler_tudo():
         vendas_qtd = (vendas.groupby("ativo")["qtd"].sum() if not vendas.empty
                       else pd.Series(dtype=float))
         grupos = []
-        for (ativo, classe), g in inv.groupby(["ativo", "classe"],
-                                              sort=False):
+        for (ativo, classe), g in inv.groupby(["ativo", "classe"], sort=False):
             qtd_bruta = float(g["qtd"].sum())
             qtd_vendida = float(vendas_qtd.get(ativo, 0.0))
             qtd_t = max(qtd_bruta - qtd_vendida, 0.0)
