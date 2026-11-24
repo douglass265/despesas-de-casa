@@ -49,62 +49,16 @@ def fmt_pct(v):
     return ("+" if v >= 0 else "") + f"{v:,.2f}%".replace(",", "@").replace(".", ",").replace("@", ".")
 
 
-@st.cache_data(ttl=43200)
-def cdi_do_periodo(dias):
-    """CDI acumulado no período (pro rata die), igual aos bancos.
-    Tenta a API do Banco Central de duas formas antes de desistir."""
-    fim = date.today()
-    ini = fim - timedelta(days=dias)
-    urls = [
-        (f"https://api.bcb.gov.br/dados/serie/bcdata.sgp.11/dados"
-         f"?formato=json&dataInicial={ini.strftime('%d/%m/%Y')}"
-         f"&dataFinal={fim.strftime('%d/%m/%Y')}"),
-        ("https://api.bcb.gov.br/dados/serie/bcdata.sgp.11/dados"
-         "/ultimos/500?formato=json"),
-    ]
-    cab = {"User-Agent": "Mozilla/5.0 (compatible; FinancasDaCasa/1.0)",
-           "Accept": "application/json"}
-    for u in urls:
-        try:
-            dados = requests.get(u, timeout=20, headers=cab).json()
-            if not dados:
-                continue
-            acum = 1.0
-            for d in dados:
-                if "data" in d:
-                    dd = pd.to_datetime(d["data"], dayfirst=True).date()
-                    if dd < ini or dd > fim:
-                        continue
-                acum *= 1.0 + float(str(d["valor"]).replace(",", ".")) / 100.0
-            return (acum - 1.0) * 100.0
-        except Exception:
-            continue
-    return None
-
-
-@st.cache_data(ttl=43200)
-def cotacao_dolar():
-    try:
-        r = requests.get("https://economia.awesomeapi.com.br/last/USD-BRL",
-                         timeout=15)
-        return float(r.json()["USDBRL"]["bid"])
-    except Exception:
-        return None
+from mercado import (MOEDAS as MOEDAS_CRIPTO, agora_br, cdi_do_periodo,
+                     cotacao_dolar, cotacoes_cripto, cotacoes_fechamento,
+                     dolar_fechamento, valor_renda_fixa)
 
 
 def valor_cdb_hoje(valor_aplicado, pct_cdi, data_apl):
     """Valor estimado hoje de um CDB a % do CDI, pro rata die."""
-    if valor_aplicado is None or valor_aplicado <= 0:
-        return None
     if pd.isna(data_apl):
         return None
-    dias = max((date.today() - data_apl.date()).days, 0)
-    if dias < 1:
-        return None
-    cdi = cdi_do_periodo(dias)
-    if cdi is None:
-        return None
-    return valor_aplicado * (1.0 + (cdi / 100.0) * (pct_cdi / 100.0))
+    return valor_renda_fixa(valor_aplicado, pct_cdi, data_apl)
 
 
 def obter_info_credenciais():
@@ -171,8 +125,14 @@ def converter_datas(serie):
 def ler_aba(nome, renomear):
     valores = abrir_planilha().worksheet(nome).get_all_values()
     if len(valores) < 2:
-        return pd.DataFrame(columns=list(renomear.values()))
-    return pd.DataFrame(valores[1:], columns=valores[0]).rename(columns=renomear)
+        return pd.DataFrame(columns=list(renomear.values()) + ["_linha"])
+    df = (pd.DataFrame(valores[1:], columns=valores[0])
+          .rename(columns=renomear))
+    # Guarda a linha VERDADEIRA da planilha agora, antes de qualquer
+    # ordenação. Ordenar por data e depois contar as posições fazia o botão
+    # de excluir apagar a linha de outro lançamento.
+    df["_linha"] = df.index + 2
+    return df
 
 
 def _limpar_movimentos(df, colunas_finais):
@@ -184,7 +144,6 @@ def _limpar_movimentos(df, colunas_finais):
     df["valor"] = df["valor"].abs()
     df["mes"] = df["data"].dt.to_period("M")
     df = df.sort_values("data", ascending=False).reset_index(drop=True)
-    df["_linha"] = df.index + 2
     return df[colunas_finais + ["mes", "_linha"]]
 
 
@@ -295,6 +254,9 @@ def calcular_faturas(cartoes, compras):
                     npar = 1
                 npar = max(npar, 1)
                 parc = round(valor / npar, 2)
+                # a ultima parcela absorve os centavos, para a soma fechar
+                # exatamente o valor da compra (12x/10x fechavam com sobra)
+                parc_final = round(valor - parc * (npar - 1), 2)
                 c0 = fech_em(d0.year, d0.month, fech)
                 if d0 > c0:
                     y0, m0 = mais_meses(d0.year, d0.month, 1)
@@ -302,7 +264,8 @@ def calcular_faturas(cartoes, compras):
                 for i in range(npar):
                     y, m = mais_meses(c0.year, c0.month, i)
                     if (y, m) in totais:
-                        totais[(y, m)] = round(totais[(y, m)] + parc, 2)
+                        val_parc = parc_final if i == npar - 1 else parc
+                        totais[(y, m)] = round(totais[(y, m)] + val_parc, 2)
 
         fs = []
         acum = 0.0
@@ -342,7 +305,6 @@ def ler_dividendos():
     d["valor"] = d["valor"].abs()
     d["mes"] = d["data"].dt.to_period("M")
     d = d.sort_values("data", ascending=False).reset_index(drop=True)
-    d["_linha"] = d.index + 2
     return d[["data", "ativo", "valor", "conta", "mes", "_linha"]]
 
 
@@ -362,7 +324,6 @@ def ler_vendas():
     v["valor"] = v["valor"].abs()
     v["mes"] = v["data"].dt.to_period("M")
     v = v.sort_values("data", ascending=False).reset_index(drop=True)
-    v["_linha"] = v.index + 2
     return v[["data", "ativo", "qtd", "valor", "conta_dest", "obs",
               "mes", "_linha"]]
 
@@ -380,7 +341,9 @@ def listar_posicoes():
     for _, r in inv.iterrows():
         if float(r["qtd"]) > 0 or float(r["atual"]) > 0:
             pos.append({"ativo": r["ativo"], "classe": r["classe"],
-                        "qtd": float(r["qtd"]), "atual": float(r["atual"])})
+                        "qtd": float(r["qtd"]), "atual": float(r["atual"]),
+                        "preco_fech": float(r.get("preco_fech")
+                                            or r["pa"] or 0.0)})
     return pos
 
 
@@ -406,16 +369,13 @@ def ler_tudo():
         transf = transf.dropna(subset=["data", "valor"])
         transf["valor"] = transf["valor"].abs()
         transf = transf.sort_values("data", ascending=False).reset_index(drop=True)
-        transf["_linha"] = transf.index + 2
     vendas = ler_vendas()
     contas = ler_aba(ABA_CONTAS, {"Banco/Conta": "conta", "Tipo": "tipo",
                                   "Saldo Inicial (R$)": "saldo_inicial"})
     if not contas.empty:
-        contas = contas[contas["conta"] != ""]
+        contas = contas[contas["conta"] != ""].copy()
         contas["saldo_inicial"] = (contas["saldo_inicial"]
                                    .map(converter_valor).fillna(0.0))
-        contas = contas.reset_index(drop=True)
-        contas["_linha"] = contas.index + 2
         saidas = (desp.groupby("conta")["valor"].sum() if not desp.empty
                   else pd.Series(dtype=float))
         entradas = (rec.groupby("conta")["valor"].sum() if not rec.empty
@@ -450,8 +410,6 @@ def ler_tudo():
         cartoes["vencimento"] = (cartoes["vencimento"]
                                  .map(converter_valor).fillna(0))
         cartoes["limite"] = cartoes["limite"].map(converter_valor).fillna(0.0)
-        cartoes = cartoes.reset_index(drop=True)
-        cartoes["_linha"] = cartoes.index + 2
     compras = ler_aba(ABA_COMPRAS, {"Data da Compra": "data",
                                     "Descrição": "descricao", "Cartão": "cartao",
                                     "Categoria": "categoria",
@@ -465,7 +423,6 @@ def ler_tudo():
         compras = compras.dropna(subset=["data", "valor"])
         compras["valor"] = compras["valor"].abs()
         compras = compras.sort_values("data", ascending=False).reset_index(drop=True)
-        compras["_linha"] = compras.index + 2
     inv = ler_aba(ABA_INVEST, {"Ativo": "ativo", "Classe": "classe",
                                "Quantidade": "qtd", "Preço Médio (R$)": "pm",
                                "Preço Atual (R$)": "pa",
@@ -479,19 +436,92 @@ def ler_tudo():
         for c in ["qtd", "pm", "pa", "investido", "atual", "pct_cdi"]:
             inv[c] = inv[c].map(converter_valor).fillna(0.0)
         inv["data_apl"] = converter_datas(inv["data_apl"])
-        inv = inv.reset_index(drop=True)
-        inv["_linha"] = inv.index + 2
-        dol = cotacao_dolar()
+
+        # ---- Fechamento do ultimo pregao (B3, exterior e cripto) ----
+        # O preco "atual" digitado na planilha era uma foto velha; agora a
+        # tela usa o fechamento real. Se a fonte nao responder, cai para o
+        # valor digitado em vez de inventar numero.
+        inv["preco_fech"] = inv["pa"]
+        inv["var_dia"] = 0.0
+        inv["data_cotacao"] = pd.NaT
+
+        # separa quem e da B3, quem e do exterior e quem e cripto
+        da_b3, do_exterior = [], set()
+        for _, r in inv.iterrows():
+            if r["classe"] in CLASSES_RENDA_FIXA:
+                continue
+            t = str(r["ativo"]).strip().upper()
+            if not t:
+                continue
+            if t in MOEDAS_CRIPTO:
+                continue
+            if r["classe"] in CLASSES_MOEDA_USD:
+                do_exterior.add(t)
+            else:
+                da_b3.append(t)
+
+        try:
+            cot_b3 = cotacoes_fechamento(tuple(sorted(set(da_b3))))
+        except Exception:
+            cot_b3 = {}
+        cot_exterior = {}
+        if do_exterior:
+            externos = tuple(sorted(do_exterior))
+            try:
+                cot_exterior = cotacoes_fechamento(externos,
+                                                   sem_sufixo=externos)
+            except Exception:
+                cot_exterior = {}
+        try:
+            cot_cripto = cotacoes_cripto()
+        except Exception:
+            cot_cripto = {}
+
+        dol_info = None
+        try:
+            dol_info = dolar_fechamento()
+        except Exception:
+            dol_info = None
+        dol = dol_info["valor"] if dol_info else None
+
         for i, r in inv.iterrows():
             try:
-                if r["classe"] in CLASSES_MOEDA_USD and dol:
-                    inv.at[i, "investido"] = round(r["qtd"] * r["pm"] * dol, 2)
-                    inv.at[i, "atual"] = round(r["qtd"] * r["pa"] * dol, 2)
-                elif (r["classe"] in CLASSES_RENDA_FIXA and r["pct_cdi"] > 0
-                      and not pd.isna(r["data_apl"])):
-                    v = valor_cdb_hoje(r["investido"], r["pct_cdi"],
-                                       r["data_apl"])
+                ticker = str(r["ativo"]).strip().upper()
+                if r["classe"] in CLASSES_RENDA_FIXA:
+                    v = None
+                    if r["pct_cdi"] > 0 and not pd.isna(r["data_apl"]):
+                        v = valor_cdb_hoje(r["investido"], r["pct_cdi"],
+                                           r["data_apl"])
                     inv.at[i, "atual"] = round(v, 2) if v else r["investido"]
+                    inv.at[i, "preco_fech"] = round(float(inv.at[i, "atual"]), 2)
+                    continue
+                if ticker in MOEDAS_CRIPTO and cot_cripto.get(ticker):
+                    cot = cot_cripto[ticker]
+                    inv.at[i, "preco_fech"] = round(cot["fech"], 4)
+                    inv.at[i, "var_dia"] = round(cot["var"], 2)
+                    inv.at[i, "data_cotacao"] = pd.Timestamp(agora_br().date())
+                elif r["classe"] in CLASSES_MOEDA_USD:
+                    cot = cot_exterior.get(ticker)
+                    if cot:
+                        inv.at[i, "preco_fech"] = round(cot["fech"], 4)
+                        inv.at[i, "var_dia"] = round(cot["var"], 2)
+                        inv.at[i, "data_cotacao"] = pd.Timestamp(cot["data"])
+                else:
+                    cot = cot_b3.get(ticker)
+                    if cot:
+                        inv.at[i, "preco_fech"] = round(cot["fech"], 2)
+                        inv.at[i, "var_dia"] = round(cot["var"], 2)
+                        inv.at[i, "data_cotacao"] = pd.Timestamp(cot["data"])
+
+                if r["classe"] in CLASSES_MOEDA_USD:
+                    # valor em dolar -> converte para real pelo fechamento
+                    preco = float(inv.at[i, "preco_fech"])
+                    inv.at[i, "investido"] = round(r["qtd"] * r["pm"] * (dol or 1),
+                                                   2)
+                    inv.at[i, "atual"] = round(r["qtd"] * preco * (dol or 1), 2)
+                else:
+                    inv.at[i, "atual"] = round(
+                        r["qtd"] * float(inv.at[i, "preco_fech"]), 2)
             except Exception:
                 pass
         if not contas.empty and "conta_orig" in inv.columns:
@@ -515,9 +545,16 @@ def ler_tudo():
                     if qtd_bruta > 0 else round(float(g["pm"].mean()), 2))
             if classe in CLASSES_RENDA_FIXA:
                 pa_t = round(at_t / qtd_t, 2) if qtd_t > 0 else 0.0
+                fech_t = pa_t
+                var_t = 0.0
             else:
                 pa_t = (round(float((g["qtd"] * g["pa"]).sum() / qtd_bruta), 2)
                         if qtd_bruta > 0 else round(float(g["pa"].mean()), 2))
+                fech_t = (round(float((g["qtd"] * g["preco_fech"]).sum()
+                                      / qtd_bruta), 2)
+                          if qtd_bruta > 0
+                          else round(float(g["preco_fech"].mean()), 2))
+                var_t = float(g["var_dia"].iloc[0]) if len(g) else 0.0
             com_cdi = g.loc[g["pct_cdi"] > 0, "pct_cdi"]
             pct = float(com_cdi.iloc[0]) if not com_cdi.empty else 0.0
             orig = ", ".join(sorted({str(x) for x in g["conta_orig"]
@@ -525,6 +562,8 @@ def ler_tudo():
             grupos.append({
                 "ativo": ativo, "classe": classe, "qtd": round(qtd_t, 4),
                 "pm": pm_t, "pa": pa_t, "investido": inv_t, "atual": at_t,
+                "preco_fech": fech_t, "var_dia": var_t,
+                "data_cotacao": g["data_cotacao"].max(),
                 "pct_cdi": pct, "data_apl": g["data_apl"].min(),
                 "conta_orig": orig,
                 "_linha": int(g["_linha"].iloc[0])})
