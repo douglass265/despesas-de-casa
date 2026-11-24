@@ -3,7 +3,8 @@ import plotly.express as px
 import streamlit as st
 from datetime import date
 from helpers import (fmt_rs, fmt_pct, barra_h, MESES_PT, ler_tudo,
-                     ler_dividendos, calcular_faturas, rentabilidade_total_row)
+                     ler_dividendos, calcular_faturas, rentabilidade_total_row,
+                     CLASSES_RENDA_FIXA)
 
 
 def render(desp, rec, contas, inv):
@@ -23,9 +24,20 @@ def render(desp, rec, contas, inv):
     rentab = ((val_atual - total_inv + div_total) / total_inv * 100.0
               if total_inv > 0 else 0.0)
 
+    var_dia_total = 0.0
+    if not inv.empty and "var_dia" in inv.columns:
+        for _, r in inv.iterrows():
+            if r["classe"] not in CLASSES_RENDA_FIXA:
+                var_dia_total += float(r["qtd"]) * float(r["preco_fech"]) * (
+                    float(r["var_dia"]) / 100.0)
+
     m1, m2 = st.columns(2)
     m1.metric("🏦 Saldo total das contas", fmt_rs(total_contas))
-    m2.metric("💼 Patrimônio investido", fmt_rs(val_atual))
+    m2.metric("💼 Patrimônio investido (cotação)",
+              fmt_rs(val_atual),
+              delta=(f"{fmt_rs(var_dia_total)} hoje"
+                     if var_dia_total else None),
+              delta_color="off")
     p1, p2, p3 = st.columns(3)
     p1.metric("💰 Total aplicado", fmt_rs(total_inv))
     p2.metric("💎 Dividendos recebidos", fmt_rs(div_total))
@@ -72,20 +84,33 @@ def render(desp, rec, contas, inv):
                 lambda r: rentabilidade_total_row(
                     r, div_por_ativo.get(r["ativo"], 0.0)), axis=1)
             tb["div_receb"] = tb["ativo"].map(lambda a: div_por_ativo.get(a, 0.0))
+            tb["ganho"] = tb["atual"] - tb["investido"]
             tb = tb.sort_values("atual", ascending=False)
             st.dataframe(
-                tb[["ativo", "classe", "qtd", "pm", "pa", "investido",
-                    "atual", "rent_total", "div_receb"]],
+                tb[["ativo", "classe", "qtd", "pm", "preco_fech", "var_dia",
+                    "investido", "atual", "ganho", "rent_total", "div_receb"]],
                 use_container_width=True, hide_index=True,
                 column_config={
                     "ativo": "Ativo", "classe": "Classe",
                     "qtd": st.column_config.NumberColumn("Qtd", format="%.4f"),
                     "pm": st.column_config.NumberColumn("Preço médio", format="R$ %.2f"),
-                    "pa": st.column_config.NumberColumn("Preço atual", format="R$ %.2f"),
+                    "preco_fech": st.column_config.NumberColumn(
+                        "Fech. anterior", format="R$ %.2f",
+                        help="Fechamento da última sessão da B3"),
+                    "var_dia": st.column_config.NumberColumn(
+                        "Variação", format="%.2f%%",
+                        help="Variação do último pregão"),
                     "investido": st.column_config.NumberColumn("Investido", format="R$ %.2f"),
-                    "atual": st.column_config.NumberColumn("Valor atual", format="R$ %.2f"),
+                    "atual": st.column_config.NumberColumn("Valor hoje", format="R$ %.2f"),
+                    "ganho": st.column_config.NumberColumn("Ganho", format="R$ %.2f"),
                     "rent_total": st.column_config.NumberColumn("Rent. c/ dividendos", format="%.2f%%"),
                     "div_receb": st.column_config.NumberColumn("Dividendos", format="R$ %.2f")})
+            datas = [d for d in tb["data_cotacao"] if pd.notna(d)]
+            if datas:
+                st.caption(f"💹 Cotação de fechamento do pregão de "
+                           f"{max(datas).strftime('%d/%m/%Y')} (B3, via Yahoo "
+                           f"Finance). Renda fixa aparece pelo valor estimado "
+                           f"com o CDI do Banco Central.")
 
     st.divider()
     st.subheader("🏦 Minhas contas")
